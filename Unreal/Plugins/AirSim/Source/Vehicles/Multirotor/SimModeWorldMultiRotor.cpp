@@ -77,13 +77,16 @@ void ASimModeWorldMultiRotor::setupClockSpeed()
 
 //-------------------------------- overrides -----------------------------------------------//
 
-std::unique_ptr<msr::airlib::ApiServerBase> ASimModeWorldMultiRotor::createApiServer() const
+std::vector<std::unique_ptr<msr::airlib::ApiServerBase>> ASimModeWorldMultiRotor::createApiServer() const
 {
+    std::vector<std::unique_ptr<msr::airlib::ApiServerBase>> api_servers;
 #ifdef AIRLIB_NO_RPC
-    return ASimModeBase::createApiServer();
+    api_servers.push_back(ASimModeBase::createApiServer());
+    return api_servers;
 #else
-    return std::unique_ptr<msr::airlib::ApiServerBase>(new msr::airlib::MultirotorRpcLibServer(
-        getApiProvider(), getSettings().api_server_address, getSettings().api_port));
+    api_servers.push_back(std::unique_ptr<msr::airlib::ApiServerBase>(new msr::airlib::MultirotorRpcLibServer(
+        getApiProvider(), getSettings().api_server_address)));
+    return api_servers;
 #endif
 }
 
@@ -127,7 +130,7 @@ std::unique_ptr<PawnSimApi> ASimModeWorldMultiRotor::createVehicleSimApi(
     const PawnSimApi::Params& pawn_sim_api_params) const
 {
     auto vehicle_sim_api = std::unique_ptr<PawnSimApi>(new MultirotorPawnSimApi(pawn_sim_api_params));
-    vehicle_sim_api->initialize(); 
+    vehicle_sim_api->initialize();
     //For multirotors the vehicle_sim_api are in PhysicsWOrld container and then get reseted when world gets reseted
     //vehicle_sim_api->reset();
     return vehicle_sim_api;

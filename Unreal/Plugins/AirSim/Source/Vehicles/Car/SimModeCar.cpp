@@ -58,7 +58,7 @@ void ASimModeCar::setupClockSpeed()
 void ASimModeCar::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    
+
     if (pause_period_start_ > 0) {
         if (ClockFactory::get()->elapsedSince(pause_period_start_) >= pause_period_) {
             if (!isPaused())
@@ -71,13 +71,16 @@ void ASimModeCar::Tick(float DeltaSeconds)
 
 //-------------------------------- overrides -----------------------------------------------//
 
-std::unique_ptr<msr::airlib::ApiServerBase> ASimModeCar::createApiServer() const
+std::vector<std::unique_ptr<msr::airlib::ApiServerBase>> ASimModeCar::createApiServer() const
 {
+    std::vector<std::unique_ptr<msr::airlib::ApiServerBase>> api_servers;
 #ifdef AIRLIB_NO_RPC
-    return ASimModeBase::createApiServer();
+    api_servers.push_back(ASimModeBase::createApiServer());
+    return api_servers;
 #else
-    return std::unique_ptr<msr::airlib::ApiServerBase>(new msr::airlib::CarRpcLibServer(
-        getApiProvider(), getSettings().api_server_address, getSettings().api_port));
+    api_servers.push_back(std::unique_ptr<msr::airlib::ApiServerBase>(new msr::airlib::CarRpcLibServer(
+        getApiProvider(), getSettings().api_server_address)));
+    return api_servers;
 #endif
 }
 
@@ -120,7 +123,7 @@ std::unique_ptr<PawnSimApi> ASimModeCar::createVehicleSimApi(
     const PawnSimApi::Params& pawn_sim_api_params) const
 {
     auto vehicle_pawn = static_cast<TVehiclePawn*>(pawn_sim_api_params.pawn);
-    auto vehicle_sim_api = std::unique_ptr<PawnSimApi>(new CarPawnSimApi(pawn_sim_api_params, 
+    auto vehicle_sim_api = std::unique_ptr<PawnSimApi>(new CarPawnSimApi(pawn_sim_api_params,
         vehicle_pawn->getKeyBoardControls(), vehicle_pawn->getVehicleMovementComponent()));
     vehicle_sim_api->initialize();
     vehicle_sim_api->reset();
