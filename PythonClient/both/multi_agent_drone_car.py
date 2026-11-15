@@ -59,11 +59,11 @@ airsim.wait_key('Press any key to take images')
 # get camera images from the car
 responses1 = client_1.simGetImages([
     airsim.ImageRequest("0", airsim.ImageType.DepthVis),  #depth visualization image
-    airsim.ImageRequest("1", airsim.ImageType.Scene, False, False)], vehicle_name="Drone1")  #scene vision image in uncompressed RGBA array
+    airsim.ImageRequest("1", airsim.ImageType.Scene)], vehicle_name="Drone1")  #scene vision image in uncompressed RGBA array
 print('Drone1: Retrieved images: %d' % len(responses1))
 responses2 = client_2.simGetImages([
 	airsim.ImageRequest("0", airsim.ImageType.Segmentation),  #depth visualization image
-	airsim.ImageRequest("1", airsim.ImageType.Scene, False, False)], "Car1")  #scene vision image in uncompressed RGBA array
+	airsim.ImageRequest("1", airsim.ImageType.Scene)], "Car1")  #scene vision image in uncompressed RGBA array
 print('Car1: Retrieved images: %d' % (len(responses2)))
 
 
