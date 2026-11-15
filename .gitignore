@@ -380,3 +380,4 @@ build_docs/
 
 # Unreal Engine precomputed lighting caches (exceed GitHub 100MB limit)
 *_BuiltData.uasset
+*.bak
