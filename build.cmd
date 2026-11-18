@@ -78,7 +78,7 @@ ECHO Starting cmake to build rpclib...
 IF NOT EXIST external\rpclib\rpclib-2.2.1\build mkdir external\rpclib\rpclib-2.2.1\build
 cd external\rpclib\rpclib-2.2.1\build
 REM cmake -G"Visual Studio 14 2015 Win64" ..
-cmake -G"Visual Studio 16 2019" -A x64 -T v141 ..
+cmake -G"Visual Studio 16 2019" ..
 
 if "%buildMode%" == "--Debug" (
 cmake --build . --config Debug
@@ -157,15 +157,15 @@ IF NOT EXIST AirLib\deps\eigen3 goto :buildfailed
 
 REM //---------- now we have all dependencies to compile AirSim.sln which will also compile MavLinkCom ----------
 if "%buildMode%" == "--Debug" (
-msbuild /p:PlatformToolset=v141 /p:Platform=x64 /p:Configuration=Debug AirSim.sln
+msbuild /p:Platform=x64 /p:Configuration=Debug AirSim.sln
 if ERRORLEVEL 1 goto :buildfailed
 ) else if "%buildMode%" == "--Release" (
-msbuild /p:PlatformToolset=v141 /p:Platform=x64 /p:Configuration=Release AirSim.sln
+msbuild /p:Platform=x64 /p:Configuration=Release AirSim.sln
 if ERRORLEVEL 1 goto :buildfailed
 ) else (
-msbuild /p:PlatformToolset=v141 /p:Platform=x64 /p:Configuration=Debug AirSim.sln
+msbuild /p:Platform=x64 /p:Configuration=Debug AirSim.sln
 if ERRORLEVEL 1 goto :buildfailed
-msbuild /p:PlatformToolset=v141 /p:Platform=x64 /p:Configuration=Release AirSim.sln 
+msbuild /p:Platform=x64 /p:Configuration=Release AirSim.sln 
 if ERRORLEVEL 1 goto :buildfailed
 )
 
