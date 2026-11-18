@@ -437,6 +437,9 @@ void APIPCamera::enableCaptureComponent(const APIPCamera::ImageType type, bool i
             if (!capture->IsActive() || capture->TextureTarget == nullptr) {
                 capture->TextureTarget = getRenderTarget(type, false);
                 capture->Activate();
+                //bCaptureEveryFrame is turned on after the component is registered, so it isn't
+                //queued for capture yet; without this, subwindows stay black until an API request
+                capture->CaptureSceneDeferred();
             }
         }
         else {
