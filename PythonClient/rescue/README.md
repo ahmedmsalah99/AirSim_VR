@@ -29,6 +29,7 @@ Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level READM
    python fly_survey.py
    ```
    The area (orange) and the lanes (green) are drawn in the scene. Ctrl+C stops the drone in a hover.
+   The window at the bottom of the viewport shows the drone's downward camera; press `1` in the viewport to hide or show it.
 
 ## How the plan is computed
 
