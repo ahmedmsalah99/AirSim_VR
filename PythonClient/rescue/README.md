@@ -15,7 +15,7 @@ The drone searches a rectangle in a lawnmower pattern. The UGV and the confirm/p
 pip install msgpack-rpc-python numpy pyyaml
 ```
 
-Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). It sets the drone's `bottom_center` camera to 1280×720 with a 60° field of view, which the plan assumes. It also spawns the drone 4 m east of the Husky so it doesn't land on it.
+Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). Its `CameraDefaults` give every camera, including the drone's `bottom_center`, 1280×720 images with a 60° field of view, which the plan assumes. Don't configure cameras under `Vehicles` → `Cameras`: in this AirSim version that spawns a new camera actor and crashes on Play. The settings also spawn the drone 4 m east of the Husky so it doesn't land on it.
 
 ## Use
 
