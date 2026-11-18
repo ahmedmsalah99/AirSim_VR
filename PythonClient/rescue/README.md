@@ -41,6 +41,7 @@ Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). 
 ```
 python detect_once.py                      # one frame from where the drone is now
 python detect_once.py --target Victim_01   # fly above that actor first (tag it Victim_01 in the editor)
+python detect_once.py --target Victim_01 --tilt 45   # look at it at 45 deg, from back and facing it
 python detect_once.py --image some.png     # an image file, no AirSim needed
 ```
 
