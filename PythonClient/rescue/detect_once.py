@@ -75,6 +75,14 @@ def main():
     print(f"saved {out}")
 
 
+def rotate(q, v):
+    """Rotate vector v by an airsim quaternion."""
+    w, u = q.w_val, np.array([q.x_val, q.y_val, q.z_val])
+    v = np.asarray(v, float)
+    t = 2 * np.cross(u, v)
+    return v + w * t + np.cross(u, t)
+
+
 class DroneCamera:
     def __init__(self, cfg):
         import setup_path  # noqa: F401  (puts this repo's airsim package on the path)
@@ -109,16 +117,27 @@ class DroneCamera:
         return image
 
     def set_tilt(self, tilt):
-        """Point the camera `tilt` degrees below the horizon, relative to the drone's body."""
-        airsim = self.airsim
-        for sign in (-1, 1):  # NED vs Unreal pitch sign isn't documented for this API; check which one looks down
-            q = airsim.to_quaternion(sign * math.radians(tilt), 0, 0)
-            self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.name)
-            pose = self.client.simGetCameraInfo(self.camera, vehicle_name=self.name).pose
-            pitch, _, _ = airsim.to_eularian_angles(pose.orientation)
-            if abs(math.degrees(pitch) + tilt) < 5:  # looking down: pitch is -tilt in NED
-                return
-        print(f"WARNING: couldn't confirm the camera points {tilt:g} deg down (pitch reads {math.degrees(pitch):.1f})")
+        """Point the camera `tilt` degrees below the horizon, straight ahead of the drone, image upright.
+
+        The pitch sign and the camera's mounting aren't documented for this API, and a pitch
+        angle can't tell "45 deg down, forward" from "135 deg down, backwards, upside down".
+        So try the candidate rotations and keep the one whose actual forward and up
+        directions, read back from AirSim, are the ones wanted.
+        """
+        airsim, t = self.airsim, math.radians(tilt)
+        body = self.client.getMultirotorState(vehicle_name=self.name).kinematics_estimated.orientation
+        # In the drone's frame (x forward, z down): forward tilted down by t, image top towards the sky.
+        want_forward = rotate(body, (math.cos(t), 0, math.sin(t)))
+        want_up = rotate(body, (math.sin(t), 0, -math.cos(t)))
+        for sign in (-1, 1):
+            for roll, yaw in ((0, 0), (math.pi, math.pi), (0, math.pi), (math.pi, 0)):
+                q = airsim.to_quaternion(sign * t, roll, yaw)
+                self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.name)
+                cam = self.client.simGetCameraInfo(self.camera, vehicle_name=self.name).pose.orientation
+                if (np.dot(rotate(cam, (1, 0, 0)), want_forward) > 0.99
+                        and np.dot(rotate(cam, (0, 0, -1)), want_up) > 0.99):
+                    return
+        sys.exit(f"couldn't point the camera {tilt:g} deg down; it may be left at an odd angle until Play restarts")
 
     def hover_near(self, target, altitude, tilt):
         c, airsim = self.client, self.airsim
