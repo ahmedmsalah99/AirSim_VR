@@ -18,8 +18,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 	"$p = '%UPROJECT%';" ^
 	"$a = (Get-Content -Raw $p | ConvertFrom-Json).EngineAssociation;" ^
 	"if ($a -like '{*') { $d = (Get-ItemProperty 'HKCU:\Software\Epic Games\Unreal Engine\Builds' -ErrorAction SilentlyContinue).$a }" ^
-	"else { $d = (Get-ItemProperty ('HKLM:\SOFTWARE\EpicGames\Unreal Engine\' + $a) -ErrorAction SilentlyContinue).InstalledDirectory };" ^
-	"if (-not $d) { Write-Host ('Engine ' + $a + ' is not registered on this machine'); exit 1 };" ^
+	"else {" ^
+	"  foreach ($k in 'HKLM:\SOFTWARE\EpicGames\Unreal Engine\', 'HKLM:\SOFTWARE\WOW6432Node\EpicGames\Unreal Engine\') { if (-not $d) { $d = (Get-ItemProperty ($k + $a) -ErrorAction SilentlyContinue).InstalledDirectory } };" ^
+	"  $dat = Join-Path $env:ProgramData 'Epic\UnrealEngineLauncher\LauncherInstalled.dat';" ^
+	"  if (-not $d -and (Test-Path $dat)) { $d = ((Get-Content -Raw $dat | ConvertFrom-Json).InstallationList | Where-Object { $_.AppName -eq ('UE_' + $a) } | Select-Object -First 1).InstallLocation };" ^
+	"  $def = Join-Path $env:ProgramFiles ('Epic Games\UE_' + $a);" ^
+	"  if (-not $d -and (Test-Path $def)) { $d = $def }" ^
+	"};" ^
+	"if (-not $d) { Write-Host ('Could not find where engine ' + $a + ' is installed'); exit 1 };" ^
 	"$ubt = @('Engine\Binaries\DotNET\UnrealBuildTool.exe', 'Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe') | ForEach-Object { Join-Path $d $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1;" ^
 	"if (-not $ubt) { Write-Host ('UnrealBuildTool.exe not found under ' + $d); exit 1 };" ^
 	"$kind = if (Test-Path (Join-Path $d 'Engine\Build\InstalledBuild.txt')) { '-rocket' } else { '-engine' };" ^
