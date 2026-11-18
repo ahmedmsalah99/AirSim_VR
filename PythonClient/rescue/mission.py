@@ -217,16 +217,18 @@ class Mission:
 
         c.rotateToYawAsync(heading, vehicle_name=self.name).join()
         if not self.camera.set_tilt(tilt):
-            self.log("WARNING: couldn't tilt the camera to the line of sight")
+            self.log("WARNING: couldn't tilt the camera to the line of sight; keeping the search tilt")
         c.moveToPositionAsync(*point, conf["speed"], yaw_mode=airsim.YawMode(False, heading),
                               vehicle_name=self.name).join()
         c.hoverAsync(vehicle_name=self.name).join()
         time.sleep(1)  # settle so frames aren't tilted
 
         positions, confidences = [], []
-        for _ in range(conf["frames"]):
+        for i in range(conf["frames"]):
             frame = self.camera.grab(with_depth=True)
-            for d in self.detector.detect(frame.image):
+            dets = self.detector.detect(frame.image)
+            hit = None
+            for d in dets:
                 u, v = d.center[0], d.y2
                 p = self.camera.depth_point(frame, u, v)
                 if p is None:
@@ -234,7 +236,10 @@ class Mission:
                 if p is not None and np.linalg.norm(p[:2] - cand.seen_at[:2]) < conf["match_radius"]:
                     positions.append(p)
                     confidences.append(d.confidence)
+                    hit = np.linalg.norm(p[:2] - cand.seen_at[:2])
                     break
+            self.log(f"  frame {i + 1}/{conf['frames']}: " + (f"hit, {hit:.1f} m from the candidate" if hit is not None
+                                                             else f"miss ({len(dets)} person(s) elsewhere)"))
             time.sleep(conf["frame_interval_s"])
 
         cand.hits, cand.frames = len(positions), conf["frames"]
