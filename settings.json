@@ -1,0 +1,25 @@
+{
+  "SettingsVersion": 1.2,
+  "SimMode": "Both",
+  "PawnPaths": {
+    "DefaultCar": {
+      "PawnBP": "Class'/Game/Husky/BP_HuskyPawn.BP_HuskyPawn_C'"
+    }
+  },
+  "Vehicles": {
+    "Car1": {
+      "VehicleType": "PhysXCar",
+      "PawnPath": "DefaultCar",
+      "X": 0,
+      "Y": 0,
+      "Z": -2
+    },
+    "Drone1": {
+      "VehicleType": "SimpleFlight",
+      "X": 0,
+      "Y": 0,
+      "Z": -5,
+      "Yaw": 90
+    }
+  }
+}
