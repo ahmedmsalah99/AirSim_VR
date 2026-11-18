@@ -40,7 +40,6 @@ class Survey:
         c = self.client
         c.confirmConnection()
         self.check_camera()
-        self.start_camera_window()
         c.enableApiControl(True, self.name)
         c.armDisarm(True, self.name)
 
@@ -85,11 +84,6 @@ class Survey:
             self.log(f"WARNING: camera {cam['name']} has FOV {info.fov:.1f} deg in AirSim but "
                      f"{cam['hfov_deg']} in config.yaml; the plan's footprint is wrong. "
                      f"Copy the repo's settings.json to Documents\\AirSim again.")
-
-    def start_camera_window(self):
-        # AirSim's camera subwindow stays black until its camera has served one API image request.
-        request = airsim.ImageRequest(self.cfg["camera"]["name"], airsim.ImageType.Scene)
-        self.client.simGetImages([request], vehicle_name=self.name)
 
     def draw(self, ground_world_z):
         z = ground_world_z - self.plan.altitude
