@@ -62,8 +62,8 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
 
 1. **Candidate:** during a lane, each detection's feet pixel (bottom centre of the box) is projected onto the flat ground through the camera pose, which gives a position. A detection more than `merge_radius` from every known one, inside the area, is a new candidate.
 2. **Approach:** the drone stops, turns to face the candidate, tilts the camera to the line-of-sight angle, and flies down **along the line of sight**. That's the path it just saw the person through, so it's clear. It stops where a person is `confirm.min_person_px` tall (`distance = person_size × f / min_person_px`), but never lower than `confirm.min_altitude` and never farther than it already was.
-3. **Check:** it hovers and runs the detector on `frames` frames. A frame is a hit if a person is detected within `match_radius` of the candidate. Each hit is located with the depth camera: the feet pixel's depth gives the 3D point directly, with no flat-ground assumption.
-4. **Decision:** with at least `required` hits, the median position is published (with its spread as the covariance) and marked green. Otherwise the candidate is rejected and marked red.
+3. **Check:** it hovers and runs the detector on `frames` frames. A frame is a hit if a person is detected within `match_radius` of the candidate (feet projected onto the flat ground).
+4. **Decision:** with at least `required` hits, the person is confirmed. One more frame with depth measures their feet directly, with no flat-ground assumption; that position is published (with the hits' spread as the covariance) and marked green. Otherwise the candidate is rejected and marked red. Depth is fetched only this once, at 320×180 (`settings.json`): AirSim's Python client decodes float images very slowly (about 30 s for a full 1280×720 one).
 5. **Resume:** it flies back up the same line to where it stopped, restores the camera tilt and heading, and continues the lane.
 
 ## Messages

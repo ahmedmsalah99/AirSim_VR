@@ -88,3 +88,15 @@ def test_no_convention_found_returns_false():
     cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
     assert not cam.set_tilt(45)
     assert cam.convention is None
+
+
+def test_depth_point_scales_pixels_to_a_smaller_depth_image():
+    client = FakeClient()
+    cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
+    depth = np.full((180, 320), 50.0, np.float32)
+    depth[135, 240] = 10.0                     # image pixel (960, 540) in a 1280x720 frame
+    depth[134:137, 239:242] = 10.0
+    frame = types.SimpleNamespace(depth=depth, pos=np.zeros(3), q=quat(0, 0, 0))
+    p = cam.depth_point(frame, 960, 540)
+    assert p[0] == pytest.approx(10.0)         # planar depth along the camera's forward axis
+    assert cam.depth_point(frame, 100, 100)[0] == pytest.approx(50.0)

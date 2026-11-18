@@ -242,16 +242,16 @@ class Mission:
         c.hoverAsync(vehicle_name=self.name).join()
         time.sleep(1)  # settle so frames aren't tilted
 
+        # Hit or miss per frame from the scene image and the flat-ground projection: fast.
+        # Float depth images are very slow through AirSim's Python client, so depth is fetched
+        # once, for the final position of a confirmed person.
         positions, confidences = [], []
         for i in range(conf["frames"]):
-            frame = self.camera.grab(with_depth=True)
+            frame = self.camera.grab()
             dets = self.detector.detect(frame.image)
             hit = None
             for d in dets:
-                u, v = d.center[0], d.y2
-                p = self.camera.depth_point(frame, u, v)
-                if p is None:
-                    p = self.camera.ground_point(frame, u, v, self.ground_z)
+                p = self.camera.ground_point(frame, d.center[0], d.y2, self.ground_z)
                 if p is not None and np.linalg.norm(p[:2] - cand.seen_at[:2]) < conf["match_radius"]:
                     positions.append(p)
                     confidences.append(d.confidence)
@@ -266,8 +266,13 @@ class Mission:
             pts = np.array(positions)
             cand.status, cand.position = "confirmed", np.median(pts, axis=0)
             cand.std = np.maximum(pts.std(axis=0), 0.05)
+            measured = self.depth_position(cand.position, conf["match_radius"])
+            if measured is not None:
+                cand.position = measured
+            source = "depth camera" if measured is not None else "ground projection"
             w = self.to_world(cand.position)
-            self.log(f"CONFIRMED victim {cand.id} at x={w[0]:.1f} y={w[1]:.1f} ({cand.hits}/{cand.frames} frames)")
+            self.log(f"CONFIRMED victim {cand.id} at x={w[0]:.1f} y={w[1]:.1f} ({cand.hits}/{cand.frames} frames, "
+                     f"position from the {source})")
             self.publisher.publish(cand.id, w, cand.std, float(np.mean(confidences)), cand.hits, cand.frames)
             self.mark(cand.position, CONFIRMED_COLOR, f"victim {cand.id}")
         else:
@@ -280,6 +285,15 @@ class Mission:
         self.goto(stop, conf["speed"], heading, what="climb back")
         if not self.camera.set_tilt(self.plan.tilt_deg):
             self.log("WARNING: couldn't restore the camera tilt")
+
+    def depth_position(self, near, radius):
+        """The person's feet measured with the depth camera (one frame), or None if not found."""
+        frame = self.camera.grab(with_depth=True)
+        for d in self.detector.detect(frame.image):
+            p = self.camera.depth_point(frame, d.center[0], d.y2)
+            if p is not None and np.linalg.norm(p[:2] - near[:2]) < radius:
+                return p
+        return None
 
     # ---- drawing and reporting ------------------------------------------------------------
 

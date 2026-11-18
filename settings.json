@@ -16,8 +16,8 @@
       },
       {
         "ImageType": 1,
-        "Width": 1280,
-        "Height": 720,
+        "Width": 320,
+        "Height": 180,
         "FOV_Degrees": 60
       }
     ]
