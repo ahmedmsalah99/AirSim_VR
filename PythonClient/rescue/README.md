@@ -1,13 +1,17 @@
 # Rescue mission
 
-The drone searches a rectangle in a lawnmower pattern. The UGV and the confirm/publish steps come next.
+The drone searches a rectangle in a lawnmower pattern with its camera tilted forward. When it sees a person, it approaches along its line of sight to confirm them, publishes their position over ZeroMQ, and carries on with the search. The UGV comes next.
 
 | File | What it does |
 |---|---|
-| `config.yaml` | Search area, drone limits, camera and detector parameters |
-| `survey_plan.py` | Computes altitude, lane spacing, speed and waypoints, and explains each choice |
-| `fly_survey.py` | Flies the plan in AirSim and draws it in the scene |
+| `config.yaml` | Search area, drone limits, camera, detector, confirmation and publishing settings |
+| `mission.py` | The mission: search, confirm, publish, resume, return home, report |
+| `survey_plan.py` | Computes altitude, detection band, lane spacing, speed and lanes, and explains each choice |
+| `camera_geometry.py` | Pixel ↔ ground geometry, and the line-of-sight confirm point |
+| `drone_camera.py` | The drone camera in AirSim: tilt it, grab frames with depth, locate pixels |
 | `detector.py` | Runs the YOLO11 ONNX person detector over image tiles |
+| `publisher.py` | Publishes confirmed victims over ZeroMQ |
+| `listen_victims.py` | Prints what the mission publishes |
 | `detect_once.py` | Tests the detector on one drone camera frame or an image file |
 | `compare_detectors.py` | Runs the `.pt` with Ultralytics and the ONNX pipeline on the same image, to check the pipeline |
 | `export_onnx.py` | Converts the YOLO11 `.pt` detector to ONNX |
@@ -15,10 +19,12 @@ The drone searches a rectangle in a lawnmower pattern. The UGV and the confirm/p
 ## Setup
 
 ```
-pip install msgpack-rpc-python numpy pyyaml onnxruntime opencv-python
+pip install msgpack-rpc-python numpy pyyaml onnxruntime opencv-python pyzmq
 ```
 
 Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). Its `CameraDefaults` give every camera, including the drone's `bottom_center`, 1280×720 images with a 60° field of view, which the plan assumes. Don't configure cameras under `Vehicles` → `Cameras`: in this AirSim version that spawns a new camera actor and crashes on Play. The settings also spawn the drone 4 m east of the Husky so it doesn't land on it.
+
+Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). Tag the people placed in the level `Victim_01`, `Victim_02`, … (Details → Actor → Tags) and list the tags under `ground_truth` in `config.yaml`, so the mission can report its position error.
 
 ## Use
 
@@ -27,40 +33,68 @@ Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level READM
    ```
    python survey_plan.py
    ```
-3. Press Play in Unreal, then fly it:
+3. Press Play in Unreal. In a second terminal, start listening for victims:
    ```
-   python fly_survey.py
+   python listen_victims.py
    ```
-   The area (orange) and the lanes (green) are drawn in the scene. Ctrl+C stops the drone in a hover.
-   The window at the bottom of the viewport shows the drone's downward camera; press `1` in the viewport to hide or show it.
+4. Run the mission:
+   ```
+   python mission.py               # search, confirm, publish
+   python mission.py --no-detect   # only fly the search pattern
+   ```
+   The area (orange) and the lanes (green) are drawn in the scene; candidates are marked yellow, confirmed victims green and rejected candidates red. Ctrl+C stops the drone in a hover. At the end it prints each victim's position and its error against the tagged people, and saves a summary (`output/mission_<time>.json`).
+   The window at the bottom of the viewport shows the drone's camera; press `1` in the viewport to hide or show it.
+
+## How the plan is computed
+
+The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90 = straight down). On flat ground it sees a trapezoid. A person covers `person_size × f × sin(a) / h` detector pixels, where `a` is the ray's angle below the horizon, `h` the altitude and `f` the focal length in detector pixels (each image tile is resized to the 640 px input, so `f` shrinks with it). So people are only detectable out to the slant range where they shrink to `min_person_px`.
+
+1. **Detection band:** from the bottom edge of the image (`near`) to wherever comes first, the top edge of the image or that range (`far`). `near` and `far` are distances ahead of the drone.
+2. **Swath:** the ground width covered at the far edge, `2 × depth × tan(hfov / 2)`. Every point within half a swath of the lane crosses the band.
+3. **Lane spacing** = swath × (1 − `side_overlap`), spread evenly so the outer lanes just reach the edges. Lanes run along whichever axis gives the shorter mission and alternate direction; the drone faces its direction of travel. Each lane is shifted back by `near`, so the band starts on the area's edge and ends just past the far edge.
+4. **Speed** is the slowest of:
+   - `max_speed` of the drone,
+   - motion blur: image motion is fastest at the near edge, `v·sin²(a)/h` rad/s, so `v ≤ max_blur_px × h / (f × sin²(a_near) × exposure_s)`,
+   - frames per person: a ground point crosses the band in `(far − near) / v` seconds and must be seen in `min_frames_per_point` frames at the detector's frame rate (`fps_per_tile / tiles`).
+5. **Altitude:** every altitude from the lowest safe one (`max_obstacle_height + safety_margin`, at least `min_altitude`) up to `max_altitude` is tried in 0.5 m steps, and the fastest mission wins (the lowest altitude among near-ties). If no altitude keeps people detectable, the plan is rejected with suggestions.
+
+## How a person is confirmed
+
+1. **Candidate:** during a lane, each detection's feet pixel (bottom centre of the box) is projected onto the flat ground through the camera pose, which gives a position. A detection more than `merge_radius` from every known one, inside the area, is a new candidate.
+2. **Approach:** the drone stops, turns to face the candidate, tilts the camera to the line-of-sight angle, and flies down **along the line of sight**. That's the path it just saw the person through, so it's clear. It stops where a person is `confirm.min_person_px` tall (`distance = person_size × f / min_person_px`), but never lower than `confirm.min_altitude` and never farther than it already was.
+3. **Check:** it hovers and runs the detector on `frames` frames. A frame is a hit if a person is detected within `match_radius` of the candidate. Each hit is located with the depth camera: the feet pixel's depth gives the 3D point directly, with no flat-ground assumption.
+4. **Decision:** with at least `required` hits, the median position is published (with its spread as the covariance) and marked green. Otherwise the candidate is rejected and marked red.
+5. **Resume:** it flies back up the same line to where it stopped, restores the camera tilt and heading, and continues the lane.
+
+## Messages
+
+`mission.py` publishes on `publish.endpoint` (default `tcp://*:5556`), topic `/rescue/victims`. Each message is JSON shaped like a ROS `PoseWithCovarianceStamped`:
+
+```json
+{"header": {"stamp": 1700000000.12, "frame_id": "airsim_world_ned"},
+ "id": 1, "position": {"x": 12.3, "y": -4.5, "z": 0.2},
+ "covariance": [0.09, 0, 0, 0, 0.04, 0, 0, 0, 0.01],
+ "confidence": 0.71, "hits": 6, "frames": 8}
+```
 
 ## Testing the detector
 
-Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). Then, with Play running:
+With Play running:
 
 ```
 python detect_once.py                      # one frame from where the drone is now
-python detect_once.py --target Victim_01   # fly above that actor first (tag it Victim_01 in the editor)
+python detect_once.py --target Victim_01   # fly above that actor first
 python detect_once.py --target Victim_01 --tilt 45   # look at it at 45 deg, from back and facing it
 python detect_once.py --image some.png     # an image file, no AirSim needed
 ```
 
-It prints each detection's confidence and size in pixels and saves the image with boxes in `output/`. To check the ONNX pipeline against Ultralytics itself on the same image (run it in the environment with `ultralytics` installed, e.g. the one used for `export_onnx.py`):
+It prints each detection's confidence and size in pixels and saves the image with boxes in `output/`. The image is split into `tiles_x` × `tiles_y` overlapping tiles (`detector` in `config.yaml`), each resized to the model's 640×640 input, so small people keep their pixels. The overlap must be bigger than the largest person in pixels; partial boxes from a neighbouring tile are merged into the full one.
+
+To check the ONNX pipeline against Ultralytics itself on the same image (run it in the environment with `ultralytics` installed, e.g. the one used for `export_onnx.py`):
 
 ```
 python compare_detectors.py --image output/<name>_raw.png --pt models/person_yolo11s.pt
-``` The image is split into `tiles_x` × `tiles_y` overlapping tiles (`detector` in `config.yaml`), each resized to the model's 640×640 input, so small people keep their pixels. The overlap must be bigger than the largest person in pixels; partial boxes from a neighbouring tile are merged into the full one.
-
-## How the plan is computed
-
-1. **Lowest safe altitude** = `max_obstacle_height + safety_margin` (at least `min_altitude`).
-2. **Highest altitude where people stay detectable.** The detector needs a person to cover `min_person_px` pixels in its 640 px input. Each image tile is resized to 640, so the effective image width is `width_px × min(1, 640 / tile size)`. The camera sees `2·h·tan(FOV/2)` of ground across, which gives `h_max = person_size × effective_width / (min_person_px × 2·tan(FOV/2))`. If `h_max` is below the safe altitude, the plan is rejected with suggestions. Splitting the image into more tiles raises `h_max`, at the cost of detector time per frame.
-3. **Altitude**: the drone flies at `h_max` (capped at `max_altitude`). Higher means wider lanes and fewer of them.
-4. **Lane spacing** = ground width × (1 − `side_overlap`), spread evenly so the outer lanes' footprints just reach the edges. Lanes run along whichever axis gives the shorter mission, counting `turn_time_s` per turn.
-5. **Speed** is the slowest of:
-   - `max_speed` of the drone,
-   - motion blur: `max_blur_px × ground per pixel / exposure_s`,
-   - frames per person: every ground point stays in view for `footprint along / v` seconds and must be seen in `min_frames_per_point` frames at the detector's frame rate (`fps_per_tile / tiles`).
+```
 
 ## Tests
 
