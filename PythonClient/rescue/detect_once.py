@@ -30,6 +30,9 @@ from detector import PersonDetector, draw
 from survey_plan import DEFAULT_CONFIG, load_config, plan_survey
 
 OUTPUT_DIR = Path(__file__).with_name("output")
+# Exactly 90 deg is gimbal lock for Unreal's rotators: heading and roll become ambiguous, so the
+# image comes back rotated about the view axis. Half a degree off avoids it.
+STRAIGHT_DOWN = 89.5
 
 
 def main():
@@ -102,13 +105,14 @@ class DroneCamera:
         height = self.height_above_ground()  # measured while the camera still looks straight down
         try:
             if tilt != 90:
-                self.set_tilt(tilt)
+                if not self.set_tilt(tilt):
+                    sys.exit(f"couldn't point the camera {tilt:g} deg down")
                 time.sleep(0.5)
             request = self.airsim.ImageRequest(self.camera, self.airsim.ImageType.Scene)
             response = self.client.simGetImages([request], vehicle_name=self.name)[0]
         finally:
-            if tilt != 90:
-                self.set_tilt(90)
+            if tilt != 90 and not self.set_tilt(STRAIGHT_DOWN):
+                print("WARNING: couldn't turn the camera straight down again; restart Play before flying the survey")
         image = cv2.imdecode(np.frombuffer(response.image_data_uint8, np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             sys.exit("AirSim returned no image; is Play running?")
@@ -122,7 +126,7 @@ class DroneCamera:
         The pitch sign and the camera's mounting aren't documented for this API, and a pitch
         angle can't tell "45 deg down, forward" from "135 deg down, backwards, upside down".
         So try the candidate rotations and keep the one whose actual forward and up
-        directions, read back from AirSim, are the ones wanted.
+        directions, read back from AirSim, are the ones wanted. Returns whether one was found.
         """
         airsim, t = self.airsim, math.radians(tilt)
         body = self.client.getMultirotorState(vehicle_name=self.name).kinematics_estimated.orientation
@@ -136,8 +140,8 @@ class DroneCamera:
                 cam = self.client.simGetCameraInfo(self.camera, vehicle_name=self.name).pose.orientation
                 if (np.dot(rotate(cam, (1, 0, 0)), want_forward) > 0.99
                         and np.dot(rotate(cam, (0, 0, -1)), want_up) > 0.99):
-                    return
-        sys.exit(f"couldn't point the camera {tilt:g} deg down; it may be left at an odd angle until Play restarts")
+                    return True
+        return False
 
     def hover_near(self, target, altitude, tilt):
         c, airsim = self.client, self.airsim
