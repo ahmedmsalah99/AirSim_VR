@@ -16,12 +16,22 @@ def main():
     socket.connect(endpoint)
     socket.setsockopt(zmq.SUBSCRIBE, pub["topic"].encode())
     print(f"listening on {endpoint} {pub['topic']} (Ctrl+C to stop)")
-    while True:
-        topic, body = socket.recv_multipart()
-        msg = json.loads(body)
-        p = msg["position"]
-        print(f"{topic.decode()}  victim {msg['id']}  at x={p['x']:.1f} y={p['y']:.1f} z={p['z']:.1f}  "
-              f"({msg['hits']}/{msg['frames']} frames, confidence {msg['confidence']:.2f})")
+    try:
+        while True:
+            # Wait in short slices: a blocking recv doesn't wake up for Ctrl+C on Windows.
+            if socket.poll(500):
+                show(*socket.recv_multipart())
+    except KeyboardInterrupt:
+        print("stopped")
+    finally:
+        socket.close(linger=0)
+
+
+def show(topic, body):
+    msg = json.loads(body)
+    p = msg["position"]
+    print(f"{topic.decode()}  victim {msg['id']}  at x={p['x']:.1f} y={p['y']:.1f} z={p['z']:.1f}  "
+          f"({msg['hits']}/{msg['frames']} frames, confidence {msg['confidence']:.2f})", flush=True)
 
 
 if __name__ == "__main__":
