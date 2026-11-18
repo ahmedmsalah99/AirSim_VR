@@ -24,7 +24,8 @@ class Frame:
     image: np.ndarray       # BGR
     pos: np.ndarray         # camera position, drone frame (NED, relative to its spawn point)
     q: object               # camera orientation, airsim Quaternionr
-    depth: np.ndarray = None  # planar depth in metres, same size as image
+    intr: Intrinsics        # the camera's intrinsics (zoom) when the frame was taken
+    depth: np.ndarray = None  # planar depth in metres, may be smaller than image (same FOV)
 
 
 class DroneCamera:
@@ -33,6 +34,7 @@ class DroneCamera:
         cam = cfg["camera"]
         self.camera = cam["name"]
         self.vehicle = cfg["drone"]["name"]
+        self.cam = cam
         self.intr = Intrinsics(cam["width_px"], cam["height_px"], cam["hfov_deg"])
         self.convention = None  # the CONVENTIONS entry that worked; reused for every later tilt
 
@@ -66,6 +68,11 @@ class DroneCamera:
                 return True
         return False
 
+    def set_fov(self, fov_deg):
+        """Zoom: set the horizontal field of view (all image types), and the intrinsics with it."""
+        self.client.simSetCameraFov(self.camera, fov_deg, vehicle_name=self.vehicle)
+        self.intr = Intrinsics(self.cam["width_px"], self.cam["height_px"], fov_deg)
+
     def _quat(self, t, convention):
         sign, roll, yaw = convention
         return self.airsim.to_quaternion(sign * t, roll, yaw)
@@ -91,14 +98,14 @@ class DroneCamera:
         if image is None:
             raise RuntimeError("AirSim returned no image; is Play running?")
         p, q = scene.camera_position, scene.camera_orientation
-        frame = Frame(image, np.array([p.x_val, p.y_val, p.z_val]), q)
+        frame = Frame(image, np.array([p.x_val, p.y_val, p.z_val]), q, self.intr)
         if with_depth:
             d = responses[1]
             frame.depth = np.array(d.image_data_float, np.float32).reshape(d.height, d.width)
         return frame
 
     def ground_point(self, frame, u, v, ground_z):
-        return ground_point(self.intr, frame.pos, frame.q, u, v, ground_z)
+        return ground_point(frame.intr, frame.pos, frame.q, u, v, ground_z)
 
     def depth_point(self, frame, u, v):
         """3D point at image pixel (u, v) from the frame's depth image, or None where there's no surface.
@@ -108,13 +115,13 @@ class DroneCamera:
         so (u, v) is scaled to it.
         """
         h, w = frame.depth.shape
-        x = int(np.clip(u * w / self.intr.width, 0, w - 1))
-        y = int(np.clip(v * h / self.intr.height, 0, h - 1))
+        x = int(np.clip(u * w / frame.intr.width, 0, w - 1))
+        y = int(np.clip(v * h / frame.intr.height, 0, h - 1))
         window = frame.depth[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2]
         d = float(np.median(window))
         if not 0 < d < MAX_DEPTH_M:
             return None
-        return depth_point(self.intr, frame.pos, frame.q, u, v, d)
+        return depth_point(frame.intr, frame.pos, frame.q, u, v, d)
 
     def center_depth(self):
         """Median planar depth in the middle of the view (height above ground when looking down)."""

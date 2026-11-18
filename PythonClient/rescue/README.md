@@ -61,10 +61,11 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
 ## How a person is confirmed
 
 1. **Candidate:** during a lane, each detection's feet pixel (bottom centre of the box) is projected onto the flat ground through the camera pose, which gives a position. A detection more than `merge_radius` from every known one, inside the area, is a new candidate.
-2. **Approach:** the drone stops, turns to face the candidate, tilts the camera to the line-of-sight angle, and flies down **along the line of sight**. That's the path it just saw the person through, so it's clear. It stops where a person is `confirm.min_person_px` tall (`distance = person_size × f / min_person_px`), but never lower than `confirm.min_altitude` and never farther than it already was.
-3. **Check:** it hovers and runs the detector on `frames` frames. A frame is a hit if a person is detected within `match_radius` of the candidate (feet projected onto the flat ground).
-4. **Decision:** with at least `required` hits, the person is confirmed. One more frame with depth measures their feet directly, with no flat-ground assumption; that position is published (with the hits' spread as the covariance) and marked green. Otherwise the candidate is rejected and marked red. Depth is fetched only this once, at 320×180 (`settings.json`): AirSim's Python client decodes float images very slowly (about 30 s for a full 1280×720 one).
-5. **Resume:** it flies back up the same line to where it stopped, restores the camera tilt and heading, and continues the lane.
+2. **Approach:** the drone stops, turns to face the candidate, tilts the camera to the line-of-sight angle, and flies down **along the line of sight** towards the distance where a person is `confirm.min_person_px` tall (`distance = person_size × f / min_person_px`). It never goes below `max_obstacle_height + confirm.clearance`: without an obstacle map, that's the lowest height known to be clear of trees and roofs (in practice it often barely descends).
+3. **Zoom:** whatever the approach couldn't do, the camera's zoom does: the field of view narrows until a person at that range is `min_person_px` tall, down to `confirm.min_fov_deg`. The intrinsics used to locate detections follow the zoom.
+4. **Check:** it hovers and runs the detector on `frames` frames. A frame is a hit if a person is detected within `match_radius` of the candidate (feet projected onto the flat ground).
+5. **Decision:** with at least `required` hits, the person is confirmed: the median of the hits' positions is published (with their spread as the covariance) and marked green. Otherwise the candidate is rejected and marked red. With `use_depth: true`, one more frame with depth measures the feet directly, with no flat-ground assumption; it's off by default because AirSim's Python client decodes float images very slowly (depth images are 320×180 in `settings.json` to limit that).
+6. **Resume:** it zooms back out, flies back up the same line to where it stopped, restores the camera tilt and heading, and continues the lane.
 
 ## Messages
 

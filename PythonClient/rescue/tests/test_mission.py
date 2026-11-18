@@ -68,11 +68,15 @@ class FakeClient:
 class FakeCamera:
     def __init__(self, client, airsim, cfg):
         self.tilts = []
+        self.fovs = []
         self.depth_grabs = 0
 
     def set_tilt(self, tilt):
         self.tilts.append(tilt)
         return True
+
+    def set_fov(self, fov):
+        self.fovs.append(fov)
 
     def grab(self, with_depth=False):
         self.depth_grabs += with_depth
@@ -174,13 +178,17 @@ def test_person_is_confirmed_published_once_and_the_lane_resumes(mission):
     assert len(PUBLISHED) == 1, "seen in every frame, but published only once"
     vid, world, hits, frames = PUBLISHED[0]
     assert hits == frames == cfg["confirm"]["frames"]
-    assert world[:2] == pytest.approx(PERSON[:2] + SPAWN[:2] + [0.2, -0.1])  # from the depth camera
-    assert m.camera.depth_grabs == 1  # float depth is slow: once, for the final position
+    assert world[:2] == pytest.approx(PERSON[:2] + SPAWN[:2])  # median of the ground projections
+    assert m.camera.depth_grabs == 0  # depth is off by default (slow in AirSim)
+    zoom, unzoom = m.camera.fovs
+    assert zoom < cfg["camera"]["hfov_deg"] and unzoom == cfg["camera"]["hfov_deg"]
 
     confirm_moves = [p for p, v in m.client.moves if v == cfg["confirm"]["speed"]]
     approach, back = confirm_moves
     assert np.linalg.norm(approach - PERSON) < np.linalg.norm(back - PERSON)  # went closer, then returned
     assert back[2] == pytest.approx(GROUND_Z - plan.altitude)                # back at survey altitude
+    lowest = cfg["area"]["max_obstacle_height"] + cfg["confirm"]["clearance"]
+    assert GROUND_Z - approach[2] == pytest.approx(lowest)                   # never below the obstacles
 
     tilts = m.camera.tilts
     assert tilts[0] == plan.tilt_deg and tilts[-1] == 89.5
@@ -211,3 +219,13 @@ def test_unreachable_confirm_point_does_not_hang_the_mission(mission, capsys):
         mod.airsim.MultirotorClient = monkeypatch_client
     out = capsys.readouterr().out
     assert "approach stopped" in out and "landed" in out
+
+
+def test_depth_is_used_once_when_enabled(mission):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    cfg["confirm"]["use_depth"] = True
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.run()
+    assert m.camera.depth_grabs == 1
+    assert PUBLISHED[0][1][:2] == pytest.approx(PERSON[:2] + SPAWN[:2] + [0.2, -0.1])
