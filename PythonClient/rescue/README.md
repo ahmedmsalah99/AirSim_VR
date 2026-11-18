@@ -7,12 +7,13 @@ The drone searches a rectangle in a lawnmower pattern. The UGV and the confirm/p
 | `config.yaml` | Search area, drone limits, camera and detector parameters |
 | `survey_plan.py` | Computes altitude, lane spacing, speed and waypoints, and explains each choice |
 | `fly_survey.py` | Flies the plan in AirSim and draws it in the scene |
+| `view_camera.py` | Live view of the drone's downward camera in its own window |
 | `export_onnx.py` | Converts the YOLO11 `.pt` detector to ONNX |
 
 ## Setup
 
 ```
-pip install msgpack-rpc-python numpy pyyaml
+pip install msgpack-rpc-python numpy pyyaml opencv-python
 ```
 
 Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). Its `CameraDefaults` give every camera, including the drone's `bottom_center`, 1280×720 images with a 60° field of view, which the plan assumes. Don't configure cameras under `Vehicles` → `Cameras`: in this AirSim version that spawns a new camera actor and crashes on Play. The settings also spawn the drone 4 m east of the Husky so it doesn't land on it.
@@ -29,6 +30,11 @@ Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level READM
    python fly_survey.py
    ```
    The area (orange) and the lanes (green) are drawn in the scene. Ctrl+C stops the drone in a hover.
+4. To watch the downward camera, run this in a second terminal (q or Esc closes it):
+   ```
+   python view_camera.py
+   ```
+   Don't use AirSim's built-in camera subwindows (`SubWindows` in `settings.json`): in Both mode they stayed black and froze Unreal.
 
 ## How the plan is computed
 

@@ -38,13 +38,5 @@
       "Z": -5,
       "Yaw": 90
     }
-  },
-  "SubWindows": [
-    {
-      "WindowID": 0,
-      "CameraName": "bottom_center",
-      "ImageType": 0,
-      "Visible": true
-    }
-  ]
+  }
 }
