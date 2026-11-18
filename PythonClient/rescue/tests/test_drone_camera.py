@@ -64,7 +64,7 @@ def looks(client, tilt_deg):
     return np.dot(rotate(cam, (1, 0, 0)), want)
 
 
-def test_convention_is_found_then_reused_while_swaying_and_restored_on_failure():
+def test_convention_is_found_once_then_applied_even_if_the_read_back_disagrees(capsys):
     client = FakeClient()
     cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
 
@@ -76,6 +76,15 @@ def test_convention_is_found_then_reused_while_swaying_and_restored_on_failure()
     assert cam.set_tilt(64)
     assert looks(client, 64) > 0.95
 
+    client.broken = True                   # the read-back no longer matches what was applied
+    assert cam.set_tilt(30)
+    assert client.applied.args == pytest.approx((math.radians(30), 0, 0))
+    assert "disagrees" in capsys.readouterr().out
+
+
+def test_no_convention_found_returns_false():
+    client = FakeClient()
     client.broken = True
-    assert not cam.set_tilt(30)
-    assert client.applied is cam.last_good   # put back, not left at the last candidate tried
+    cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
+    assert not cam.set_tilt(45)
+    assert cam.convention is None

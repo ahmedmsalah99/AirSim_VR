@@ -16,7 +16,7 @@ MAX_DEPTH_M = 500  # farther than this is sky
 CONVENTIONS = [(sign, roll, yaw) for sign in (-1, 1)
                for roll, yaw in ((0, 0), (math.pi, math.pi), (0, math.pi), (math.pi, 0))]
 FIND_TOLERANCE = 0.98   # cos of the allowed error while finding the convention (~11 deg)
-REUSE_TOLERANCE = 0.95  # with a known convention, allow for the drone swaying (~18 deg)
+REUSE_TOLERANCE = 0.95  # later read-backs further off than this (~18 deg) are reported
 
 
 @dataclass
@@ -35,42 +35,49 @@ class DroneCamera:
         self.vehicle = cfg["drone"]["name"]
         self.intr = Intrinsics(cam["width_px"], cam["height_px"], cam["hfov_deg"])
         self.convention = None  # the CONVENTIONS entry that worked; reused for every later tilt
-        self.last_good = None   # the last orientation that passed the check
 
     def set_tilt(self, tilt_deg):
         """Point the camera tilt_deg below the horizon, straight ahead of the drone, image upright.
 
-        A pitch angle can't tell "45 deg down, forward" from "135 deg down, backwards,
-        upside down", so each orientation is checked against the camera's actual forward
-        and up directions, read back from AirSim. The first time, every convention is
-        tried strictly (best done with the drone still, e.g. landed); after that the one
-        that worked is reused with a looser check, since a flying drone sways while it's
-        read. If nothing passes, the camera goes back to its last good orientation instead
-        of being left at a wrong one. Returns whether the tilt was set.
+        simSetCameraOrientation's pitch sign and the camera's mounting aren't documented for
+        this AirSim version, and a pitch angle can't tell "45 deg down, forward" from "135 deg
+        down, backwards, upside down". So the first call tries each convention and keeps the
+        one whose actual forward and up directions, read back from AirSim, are right (best
+        done with the drone still on the ground). Later calls apply that convention directly:
+        it's a rotation relative to the drone, so it holds for any tilt, and the read-back
+        check proved unreliable in flight. A disagreeing read-back is only printed.
+        Returns whether the tilt was set.
         """
         t = math.radians(min(tilt_deg, STRAIGHT_DOWN))
-        if self.convention is not None and self._apply(t, self.convention, REUSE_TOLERANCE):
+        if self.convention is not None:
+            q = self._quat(t, self.convention)
+            self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.vehicle)
+            fwd, up = self._agreement(t)
+            if min(fwd, up) < REUSE_TOLERANCE:
+                print(f"note: camera read-back after tilting to {tilt_deg:.0f} deg disagrees "
+                      f"(forward {math.degrees(math.acos(min(fwd, 1))):.0f} deg off, "
+                      f"up {math.degrees(math.acos(min(up, 1))):.0f} deg off); using it anyway")
             return True
         for convention in CONVENTIONS:
-            if self._apply(t, convention, FIND_TOLERANCE):
+            q = self._quat(t, convention)
+            self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.vehicle)
+            if min(self._agreement(t)) > FIND_TOLERANCE:
                 self.convention = convention
                 return True
-        if self.last_good is not None:
-            self.client.simSetCameraOrientation(self.camera, self.last_good, vehicle_name=self.vehicle)
         return False
 
-    def _apply(self, t, convention, tolerance):
+    def _quat(self, t, convention):
         sign, roll, yaw = convention
-        q = self.airsim.to_quaternion(sign * t, roll, yaw)
-        self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.vehicle)
+        return self.airsim.to_quaternion(sign * t, roll, yaw)
+
+    def _agreement(self, t):
+        """cos of the angle between the camera's actual forward/up and the wanted ones."""
         cam = self.client.simGetCameraInfo(self.camera, vehicle_name=self.vehicle).pose.orientation
         body = self.client.getMultirotorState(vehicle_name=self.vehicle).kinematics_estimated.orientation
         # In the drone's frame (x forward, z down): forward tilted down by t, image top towards the sky.
-        ok = (np.dot(rotate(cam, (1, 0, 0)), rotate(body, (math.cos(t), 0, math.sin(t)))) > tolerance
-              and np.dot(rotate(cam, (0, 0, -1)), rotate(body, (math.sin(t), 0, -math.cos(t)))) > tolerance)
-        if ok:
-            self.last_good = q
-        return ok
+        fwd = np.dot(rotate(cam, (1, 0, 0)), rotate(body, (math.cos(t), 0, math.sin(t))))
+        up = np.dot(rotate(cam, (0, 0, -1)), rotate(body, (math.sin(t), 0, -math.cos(t))))
+        return float(fwd), float(up)
 
     def grab(self, with_depth=False):
         """One frame. Scene and depth come from the same request, so they share one camera pose."""

@@ -7,8 +7,8 @@
 # Heights are metres above the ground at the drone's takeoff point.
 
 area:
-  corner_a: [-40, -40]          # any two opposite corners of the search rectangle
-  corner_b: [40, 40]
+  corner_a: [-25, -25]          # any two opposite corners of the search rectangle
+  corner_b: [25, 25]
   max_obstacle_height: 15       # tallest building or tree inside the rectangle
 
 drone:
