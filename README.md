@@ -19,12 +19,11 @@ The sections below are for Windows. The original AirSim README follows them.
 
 ## First-time setup
 
-1. Copy `settings.json` from the repo root to where AirSim reads it. AirSim never reads the copy in the repo.
+1. Copy `settings.json` from the repo root to `<Documents>\AirSim\settings.json`. AirSim never reads the copy in the repo. `<Documents>` is your Windows Documents folder, wherever Windows keeps it. With OneDrive that's `%USERPROFILE%\OneDrive\Documents`, not `%USERPROFILE%\Documents`. From the repo root, in `cmd`:
    ```
-   mkdir "%USERPROFILE%\Documents\AirSim"
-   copy settings.json "%USERPROFILE%\Documents\AirSim\settings.json"
+   for /f "delims=" %d in ('powershell -c "[Environment]::GetFolderPath('MyDocuments')"') do (mkdir "%d\AirSim" 2>nul & copy /Y settings.json "%d\AirSim\settings.json")
    ```
-   If your Documents folder is synced to OneDrive, use `%USERPROFILE%\OneDrive\Documents\AirSim` in both lines instead.
+   To see which folder that is, run `powershell -c "[Environment]::GetFolderPath('MyDocuments')"`. A `settings.json` next to `UE4Editor.exe` (`UE_4.24\Engine\Binaries\Win64`) takes priority over this one, so make sure there isn't one there.
 2. Do the full build below.
 
 ## What to rebuild after a change
@@ -36,7 +35,7 @@ After a `git pull`, look at which files changed (`git diff --stat HEAD@{1}`) and
 | `AirLib/`, `Unreal/Plugins/AirSim/`, `MavLinkCom/` or `build.cmd` (C++) | **Full build** (all 3 steps below) |
 | `Unreal/Environments/Blocks/Source/` (C++ of the project) | Steps 2 and 3 |
 | Maps, Blueprints, meshes (`.umap`, `.uasset` in `Content/`) | Nothing to build. Open the editor (step 3). Close it first if it's open |
-| `settings.json` | Copy it to `Documents\AirSim` again (first-time setup, step 1), then restart Play |
+| `settings.json` | Copy it to `<Documents>\AirSim` again (first-time setup, step 1), then restart Play |
 | Python scripts | Nothing. Run them |
 
 ### Full build
@@ -58,7 +57,7 @@ Close the Unreal editor first.
 
 ## How to run
 
-1. Make sure `Documents\AirSim\settings.json` matches the repo's `settings.json`.
+1. Make sure `<Documents>\AirSim\settings.json` matches the repo's `settings.json`.
 2. Open `Blocks.uproject` and press **Play**. The API ports only open while Play is running.
 3. In another terminal, with your Python environment active:
    ```
@@ -68,9 +67,9 @@ Close the Unreal editor first.
 ## Troubleshooting
 
 - **`WSAECONNREFUSED` from Python:** nothing is listening on the ports. Check that Play is running, then run `netstat -ano | findstr 4145`; you should see both 41451 and 41452. If they're missing, AirSim failed to start. Look for a popup in Unreal or red lines in **Window → Developer Tools → Output Log**. Common causes:
-  - `settings.json` is missing from `Documents\AirSim`, or doesn't have `"SimMode": "Both"`.
+  - `settings.json` is missing from `<Documents>\AirSim`, or doesn't have `"SimMode": "Both"`.
   - The plugin wasn't rebuilt after a C++ change.
-- **The car is the SUV instead of the Husky:** the `settings.json` in `Documents\AirSim` is missing the `PawnPaths` block and `"PawnPath": "DefaultCar"`. Copy it from the repo again.
+- **The car is the SUV instead of the Husky, or settings changes have no effect:** AirSim is reading a different `settings.json`. Usually it's in the OneDrive Documents folder while you edited `%USERPROFILE%\Documents`. Copy it again with the command from first-time setup, step 1. AirSim's own messages (such as "Loaded settings from …") only show briefly on screen after Play; they're not in the Output Log.
 - **`MSB8020 ... v141 cannot be found`:** `build.cmd` was changed to force the VS 2017 toolset. Keep it on the default VS 2019 toolset.
 - **"Failed to generate project files ... UnrealBuildTool.exe":** `Unreal/Environments/Blocks/GenerateProjectFiles.bat` must be the version that calls the engine's UnrealBuildTool directly, as on `rescue-dev`, not the one that goes through `UnrealVersionSelector`.
 
