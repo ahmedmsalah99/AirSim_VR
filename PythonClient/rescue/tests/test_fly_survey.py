@@ -45,6 +45,8 @@ def fly_survey(monkeypatch):
     fake.MultirotorClient = FakeClient
     fake.YawMode = lambda *a: a
     fake.Vector3r = lambda *a: a
+    fake.ImageRequest = lambda *a: a
+    fake.ImageType = types.SimpleNamespace(Scene=0)
     monkeypatch.setitem(sys.modules, "airsim", fake)
     monkeypatch.setitem(sys.modules, "setup_path", types.ModuleType("setup_path"))
     sys.modules.pop("fly_survey", None)
