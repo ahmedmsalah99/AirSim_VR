@@ -1,8 +1,15 @@
 """Plan the drone's lawnmower search over a rectangle.
 
-The plan picks the survey altitude, the spacing between lanes and the
-ground speed from the camera, the detector and the drone's limits, and
-records which constraint decided each value.
+The camera looks forward along the lane, tilted camera.tilt_deg below the
+horizon (90 = straight down). On flat ground it sees a trapezoid; a person
+is only big enough for the detector out to the slant range where they
+still cover min_person_px pixels. The part of the view inside that range
+(the detection band, near_m to far_m ahead of the drone) sets how wide a
+strip one lane covers and how long each ground point stays detectable.
+
+From that the plan picks the lane spacing and the speed, tries every
+altitude from the lowest safe one up to max_altitude, keeps the fastest
+mission, and records which constraint decided each value.
 
 All positions are in AirSim's world NED frame: metres from the PlayerStart,
 x north (Unreal +X), y east (Unreal +Y), z down. Altitudes are metres above
@@ -18,6 +25,7 @@ from pathlib import Path
 import yaml
 
 DEFAULT_CONFIG = Path(__file__).with_name("config.yaml")
+ALTITUDE_STEP = 0.5
 
 
 class InfeasiblePlan(Exception):
@@ -25,20 +33,35 @@ class InfeasiblePlan(Exception):
 
 
 @dataclass
+class Lane:
+    start: tuple        # (x, y) world NED
+    end: tuple
+    heading_deg: float  # direction of travel; the camera looks this way
+
+
+@dataclass
+class ViewBand:
+    """Where on the ground a person is detectable, for one altitude and tilt."""
+    near_m: float       # ahead of the drone (negative: behind it)
+    far_m: float
+    swath_m: float      # width of ground covered at the far edge
+    person_px_near: float
+    person_px_far: float
+    far_limited_by: str  # "detector pixels" or "image edge"
+
+
+@dataclass
 class SurveyPlan:
     altitude: float                 # m above ground
     min_safe_altitude: float
-    max_detect_altitude: float
     altitude_reason: str
-    footprint_across: float         # ground width seen by the camera, across the lane
-    footprint_along: float          # ground length seen by the camera, along the lane
-    gsd: float                      # metres per image pixel
-    person_px: float                # person size in detector-input pixels at this altitude
+    tilt_deg: float
+    band: ViewBand
     lane_spacing: float
     lane_axis: str                  # "x" or "y": the direction lanes run in
     speed: float
     speed_limits: dict              # name -> m/s
-    waypoints: list = field(default_factory=list)  # [(x, y)] world NED, lane ends in order
+    lanes: list = field(default_factory=list)
     path_length: float = 0.0
     est_time_s: float = 0.0
 
@@ -48,7 +71,11 @@ class SurveyPlan:
 
     @property
     def lane_count(self):
-        return len(self.waypoints) // 2
+        return len(self.lanes)
+
+    @property
+    def waypoints(self):
+        return [p for lane in self.lanes for p in (lane.start, lane.end)]
 
 
 def load_config(path=DEFAULT_CONFIG):
@@ -56,135 +83,174 @@ def load_config(path=DEFAULT_CONFIG):
         return yaml.safe_load(f)
 
 
-def camera_footprint(altitude, hfov_deg, width_px, height_px):
-    """Ground (across, along) size seen by a nadir camera; image width is across the lane."""
-    half_h = math.tan(math.radians(hfov_deg) / 2)
-    half_v = half_h * height_px / width_px
-    return 2 * altitude * half_h, 2 * altitude * half_v
-
-
 def tile_size(length, tiles, overlap):
     """Size of each of `tiles` equal tiles that cover `length` with neighbours overlapping by `overlap`."""
     return length / (1 + (tiles - 1) * (1 - overlap))
 
 
-def detector_width_px(cam, det):
-    """Image width in pixels as the detector sees it.
-
-    Each tile is resized to fit det['input_size'], so a 1280 px image read as
-    one tile reaches a 640 px detector at half resolution.
-    """
+def detector_scale(cam, det):
+    """Detector-input pixels per image pixel: each tile is resized to fit det['input_size']."""
     tile_w = tile_size(cam["width_px"], det["tiles_x"], det["tile_overlap"])
     tile_h = tile_size(cam["height_px"], det["tiles_y"], det["tile_overlap"])
-    scale = min(1.0, det["input_size"] / max(tile_w, tile_h))
-    return cam["width_px"] * scale
+    return min(1.0, det["input_size"] / max(tile_w, tile_h))
+
+
+def focal_px(cam):
+    """Focal length in image pixels (square pixels, hfov across the width)."""
+    return cam["width_px"] / (2 * math.tan(math.radians(cam["hfov_deg"]) / 2))
+
+
+def vertical_fov(cam):
+    return 2 * math.atan(math.tan(math.radians(cam["hfov_deg"]) / 2) * cam["height_px"] / cam["width_px"])
+
+
+def detection_range(cam, det):
+    """Slant range at which a person shrinks to min_person_px detector pixels."""
+    return det["person_size_m"] * focal_px(cam) * detector_scale(cam, det) / det["min_person_px"]
+
+
+def view_band(altitude, tilt_deg, cam, det):
+    """The detection band at this altitude and tilt, or None if no person would be detectable."""
+    tilt = math.radians(tilt_deg)
+    half_v = vertical_fov(cam) / 2
+    r_max = detection_range(cam, det)
+    if altitude >= r_max:
+        return None  # even straight below, people are too small
+
+    a_near = tilt + half_v                          # steepest ray: bottom edge of the image
+    a_far, limited_by = tilt - half_v, "image edge"  # shallowest ray: top edge
+    a_pixels = math.asin(altitude / r_max)          # shallower than this, people are too small
+    if a_pixels > a_far:
+        a_far, limited_by = a_pixels, "detector pixels"
+    if a_far >= min(a_near, math.pi / 2 + half_v):
+        return None
+
+    def ahead(a):
+        return altitude / math.tan(a) if abs(a - math.pi / 2) > 1e-9 else 0.0
+
+    def person_px(a):
+        return det["person_size_m"] * focal_px(cam) * detector_scale(cam, det) * math.sin(a) / altitude
+
+    # Ground width covered at the far edge: depth along the optical axis times the horizontal FOV.
+    depth = altitude / math.sin(a_far) * math.cos(a_far - tilt)
+    swath = 2 * depth * math.tan(math.radians(cam["hfov_deg"]) / 2)
+    return ViewBand(ahead(a_near), ahead(a_far), swath, person_px(a_near), person_px(a_far), limited_by)
 
 
 def plan_survey(cfg):
-    area, cam, det, drone, search = cfg["area"], cfg["camera"], cfg["detector"], cfg["drone"], cfg["search"]
-
-    # 1. Lowest altitude that clears every obstacle in the area.
+    area, search = cfg["area"], cfg["search"]
     min_safe = max(area["max_obstacle_height"] + search["safety_margin"], search["min_altitude"])
+    if min_safe > search["max_altitude"]:
+        raise InfeasiblePlan(f"the lowest safe altitude ({min_safe:.1f} m) is above max_altitude "
+                             f"({search['max_altitude']} m)")
 
-    # 2. Highest altitude where a person still covers min_person_px pixels at the detector input:
-    #    person_px = person_size / gsd, gsd = footprint_across / width_px, footprint grows linearly with h.
-    det_width = detector_width_px(cam, det)
-    tan_half = math.tan(math.radians(cam["hfov_deg"]) / 2)
-    max_detect = det["person_size_m"] * det_width / (det["min_person_px"] * 2 * tan_half)
-
-    if min_safe > max_detect:
+    plans = []
+    h = min_safe
+    while h <= search["max_altitude"] + 1e-9:
+        plan = plan_at_altitude(cfg, h)
+        if plan:
+            plans.append(plan)
+        h += ALTITUDE_STEP
+    if not plans:
+        r_max = detection_range(cfg["camera"], cfg["detector"])
         raise InfeasiblePlan(
-            f"the lowest safe altitude ({min_safe:.1f} m) is above the highest altitude where people are "
-            f"still detectable ({max_detect:.1f} m). Use more detector tiles, a higher camera resolution "
-            f"or a narrower field of view, or lower max_obstacle_height if it's overestimated.")
+            f"at {cfg['camera']['tilt_deg']} deg tilt no altitude between {min_safe:.1f} and "
+            f"{search['max_altitude']} m keeps people detectable (detection range {r_max:.1f} m). Use more "
+            f"detector tiles, a higher camera resolution, a narrower field of view or a steeper tilt.")
 
-    # Fly as high as detection allows: wider lanes, fewer turns, shorter mission.
-    altitude, altitude_reason = max_detect, "highest altitude where people stay detectable"
-    if altitude > search["max_altitude"]:
-        altitude, altitude_reason = search["max_altitude"], "max_altitude in config"
+    # Fastest mission; among near-ties (within 2%) the lowest altitude, which sees people biggest.
+    fastest = min(p.est_time_s for p in plans)
+    best = next(p for p in plans if p.est_time_s <= fastest * 1.02)
+    best.min_safe_altitude = min_safe
+    best.altitude_reason = ("lowest safe altitude" if best.altitude == min_safe
+                            else "fastest mission between the lowest safe altitude and max_altitude")
+    return best
 
-    across, along = camera_footprint(altitude, cam["hfov_deg"], cam["width_px"], cam["height_px"])
-    gsd = across / cam["width_px"]
-    person_px = det["person_size_m"] / (across / det_width)
 
-    # 3. Lanes overlap by side_overlap so a person on a lane edge is fully in at least one image.
-    max_spacing = across * (1 - search["side_overlap"])
+def plan_at_altitude(cfg, altitude):
+    area, cam, det, drone, search = cfg["area"], cfg["camera"], cfg["detector"], cfg["drone"], cfg["search"]
+    band = view_band(altitude, cam["tilt_deg"], cam, det)
+    if band is None:
+        return None
 
-    # 4. Speed: the slowest of the drone's limit, motion blur and frames per ground point.
     frame_rate = det["fps_per_tile"] / (det["tiles_x"] * det["tiles_y"])
+    a_near = math.radians(cam["tilt_deg"]) + vertical_fov(cam) / 2
     speed_limits = {
         "drone max speed": drone["max_speed"],
-        # Blur: distance moved during one exposure must stay under max_blur_px pixels.
-        "motion blur": search["max_blur_px"] * gsd / cam["exposure_s"],
-        # Every ground point stays in view for footprint_along / v seconds and must be seen in min_frames frames.
-        "frames per person": along * frame_rate / search["min_frames_per_point"],
+        # Image motion of a ground point is fastest at the near edge: v sin^2(a) / h radians per second.
+        "motion blur": search["max_blur_px"] * altitude / (focal_px(cam) * math.sin(a_near) ** 2 * cam["exposure_s"]),
+        # A ground point crosses the detection band in (far - near) / v seconds and must be seen in min_frames.
+        "frames per person": (band.far_m - band.near_m) * frame_rate / search["min_frames_per_point"],
     }
     speed = min(speed_limits.values())
+    max_spacing = band.swath_m * (1 - search["side_overlap"])
 
-    # Run lanes along whichever axis gives the shorter mission (usually the long side: fewer turns).
-    candidates = [_lanes(area, axis, across, max_spacing) for axis in ("x", "y")]
     best = None
-    for axis, waypoints, spacing in candidates:
-        length = _path_length(waypoints)
-        time_s = length / speed + (len(waypoints) // 2 - 1) * drone["turn_time_s"]
+    for axis in ("x", "y"):
+        lanes, spacing = _lanes(area, axis, band, max_spacing)
+        length = _path_length(lanes)
+        time_s = length / speed + (len(lanes) - 1) * drone["turn_time_s"]
         if best is None or time_s < best[3]:
-            best = (axis, waypoints, spacing, time_s, length)
-    axis, waypoints, spacing, sweep_time, length = best
+            best = (axis, lanes, spacing, time_s, length)
+    axis, lanes, spacing, sweep_time, length = best
 
-    climb_time = altitude / drone["climb_speed"]
-    transit = math.dist(area_home(cfg), waypoints[0]) + math.dist(waypoints[-1], area_home(cfg))
-    est_time = sweep_time + 2 * climb_time + transit / drone["transit_speed"]
-
-    return SurveyPlan(altitude=altitude, min_safe_altitude=min_safe, max_detect_altitude=max_detect,
-                      altitude_reason=altitude_reason, footprint_across=across, footprint_along=along,
-                      gsd=gsd, person_px=person_px, lane_spacing=spacing, lane_axis=axis, speed=speed,
-                      speed_limits=speed_limits, waypoints=waypoints, path_length=length,
-                      est_time_s=est_time)
+    home = tuple(drone["spawn_ned"][:2])
+    transit = math.dist(home, lanes[0].start) + math.dist(lanes[-1].end, home)
+    est_time = sweep_time + 2 * altitude / drone["climb_speed"] + transit / drone["transit_speed"]
+    return SurveyPlan(altitude=altitude, min_safe_altitude=altitude, altitude_reason="", tilt_deg=cam["tilt_deg"],
+                      band=band, lane_spacing=spacing, lane_axis=axis, speed=speed, speed_limits=speed_limits,
+                      lanes=lanes, path_length=length, est_time_s=est_time)
 
 
-def area_home(cfg):
-    return tuple(cfg["drone"]["spawn_ned"][:2])
+def _lanes(area, axis, band, max_spacing):
+    """Lanes parallel to `axis`, spread evenly across the area, alternating direction.
 
-
-def _lanes(area, axis, footprint_across, max_spacing):
-    """Lane end points for lanes parallel to `axis`, spread evenly over the area."""
-    (x0, y0), (x1, y1) = sorted([tuple(area["corner_a"]), tuple(area["corner_b"])])
-    y0, y1 = min(y0, y1), max(y0, y1)
+    The camera sees band.near_m..band.far_m ahead, so each lane is shifted back by
+    near_m: at its start the near edge of the band is on the area's edge, and at its
+    end the band has just passed the far edge.
+    """
+    (x0, y0), (x1, y1) = area["corner_a"], area["corner_b"]
+    x0, x1, y0, y1 = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
     lo, hi, start, end = (y0, y1, x0, x1) if axis == "x" else (x0, x1, y0, y1)
 
-    width = hi - lo
-    if width <= footprint_across:
+    width, swath = hi - lo, band.swath_m
+    if width <= swath:
         offsets, spacing = [(lo + hi) / 2], 0.0
     else:
-        # First and last lanes sit half a footprint inside the edges; the rest are evenly spaced.
-        n = math.ceil((width - footprint_across) / max_spacing) + 1
-        spacing = (width - footprint_across) / (n - 1)
-        offsets = [lo + footprint_across / 2 + i * spacing for i in range(n)]
+        # The outer lanes cover their edge with half a swath; the rest are evenly spaced.
+        n = math.ceil((width - swath) / max_spacing) + 1
+        spacing = (width - swath) / (n - 1)
+        offsets = [lo + swath / 2 + i * spacing for i in range(n)]
 
-    waypoints = []
+    lanes = []
     for i, c in enumerate(offsets):
-        a, b = (start, end) if i % 2 == 0 else (end, start)
-        waypoints += [(a, c), (b, c)] if axis == "x" else [(c, a), (c, b)]
-    return axis, waypoints, spacing
+        forward = i % 2 == 0
+        a, b = (start - band.near_m, end - band.near_m) if forward else (end + band.near_m, start + band.near_m)
+        heading = (0 if forward else 180) if axis == "x" else (90 if forward else -90)
+        p, q = ((a, c), (b, c)) if axis == "x" else ((c, a), (c, b))
+        lanes.append(Lane(p, q, heading))
+    return lanes, spacing
 
 
-def _path_length(waypoints):
-    return sum(math.dist(p, q) for p, q in zip(waypoints, waypoints[1:]))
+def _path_length(lanes):
+    points = [p for lane in lanes for p in (lane.start, lane.end)]
+    return sum(math.dist(p, q) for p, q in zip(points, points[1:]))
 
 
 def format_plan(plan):
+    b = plan.band
     limits = "\n".join(f"    {name:<18} {v:6.1f} m/s" for name, v in plan.speed_limits.items())
     return f"""Survey plan
-  altitude          {plan.altitude:6.1f} m   ({plan.altitude_reason})
-    lowest safe     {plan.min_safe_altitude:6.1f} m   (tallest obstacle + safety margin)
-    highest detect  {plan.max_detect_altitude:6.1f} m   (person still >= min_person_px at the detector)
-  camera footprint  {plan.footprint_across:6.1f} m across x {plan.footprint_along:.1f} m along
-  ground sample     {plan.gsd * 100:6.2f} cm/px, a person is {plan.person_px:.1f} px at the detector
+  altitude          {plan.altitude:6.1f} m   ({plan.altitude_reason}; lowest safe {plan.min_safe_altitude:.1f} m)
+  camera tilt       {plan.tilt_deg:6.1f} deg below the horizon, looking along the lane
+  detection band    {b.near_m:6.1f} to {b.far_m:.1f} m ahead (far edge set by {b.far_limited_by})
+  person size       {b.person_px_near:6.1f} px at the near edge, {b.person_px_far:.1f} px at the far edge
+  swath             {b.swath_m:6.1f} m wide at the far edge
   lanes             {plan.lane_count} lanes along {plan.lane_axis}, {plan.lane_spacing:.1f} m apart
   speed             {plan.speed:6.1f} m/s  (limited by {plan.speed_reason})
 {limits}
   path length       {plan.path_length:6.0f} m
-  estimated time    {plan.est_time_s / 60:6.1f} min (climb, transit, sweep, turns, return)"""
+  estimated time    {plan.est_time_s / 60:6.1f} min (climb, transit, sweep, turns, return; without confirmations)"""
 
 
 if __name__ == "__main__":

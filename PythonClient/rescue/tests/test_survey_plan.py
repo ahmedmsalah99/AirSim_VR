@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from survey_plan import InfeasiblePlan, camera_footprint, load_config, plan_survey  # noqa: E402
+from survey_plan import (InfeasiblePlan, detection_range, load_config, plan_at_altitude, plan_survey,  # noqa: E402
+                         vertical_fov, view_band)
 
 BASE = load_config()
 
@@ -19,33 +20,47 @@ def cfg(**overrides):
     return c
 
 
-def test_footprint_matches_hand_calculation():
-    across, along = camera_footprint(25, 60, 1280, 720)
-    assert across == pytest.approx(28.87, abs=0.01)
-    assert along == pytest.approx(across * 720 / 1280)
+def test_nadir_swath_is_the_camera_footprint_when_not_pixel_limited():
+    c = cfg(camera__tilt_deg=90)
+    band = view_band(10, 90, c["camera"], c["detector"])
+    assert band.far_limited_by == "image edge"
+    assert band.swath_m == pytest.approx(2 * 10 * math.tan(math.radians(30)))  # 2 h tan(hfov/2)
+    assert band.near_m == pytest.approx(-band.far_m)
 
 
-def test_person_is_exactly_min_px_at_max_detect_altitude():
-    plan = plan_survey(cfg(search__max_altitude=1000))
-    assert plan.altitude == pytest.approx(plan.max_detect_altitude)
-    assert plan.person_px == pytest.approx(BASE["detector"]["min_person_px"])
+def test_far_edge_is_where_a_person_shrinks_to_min_px():
+    c = cfg(camera__tilt_deg=45)
+    band = view_band(20, 45, c["camera"], c["detector"])
+    assert band.far_limited_by == "detector pixels"
+    assert band.person_px_far == pytest.approx(c["detector"]["min_person_px"])
+    slant = math.hypot(20, band.far_m)
+    assert slant == pytest.approx(detection_range(c["camera"], c["detector"]))
 
 
-def test_altitude_capped_by_config():
-    plan = plan_survey(cfg(search__max_altitude=30))
-    assert plan.altitude == 30
-    assert plan.person_px > BASE["detector"]["min_person_px"]
+def test_near_edge_is_the_bottom_of_the_image():
+    c = cfg(camera__tilt_deg=45)
+    band = view_band(20, 45, c["camera"], c["detector"])
+    a_near = math.radians(45) + vertical_fov(c["camera"]) / 2
+    assert band.near_m == pytest.approx(20 / math.tan(a_near))
 
 
-def test_more_tiles_allow_higher_altitude():
-    one = plan_survey(cfg(detector__tiles_x=1, area__max_obstacle_height=5))
-    two = plan_survey(cfg(detector__tiles_x=2, area__max_obstacle_height=5))
-    assert two.max_detect_altitude > one.max_detect_altitude
+def test_too_high_to_detect_anyone_has_no_band():
+    c = cfg()
+    r = detection_range(c["camera"], c["detector"])
+    assert view_band(r + 1, 45, c["camera"], c["detector"]) is None
 
 
-def test_obstacles_above_detect_altitude_is_infeasible():
+def test_obstacles_too_tall_is_infeasible():
     with pytest.raises(InfeasiblePlan):
-        plan_survey(cfg(area__max_obstacle_height=100))
+        plan_survey(cfg(area__max_obstacle_height=100, search__max_altitude=110))
+
+
+def test_altitude_within_bounds_and_fastest():
+    c = cfg(search__max_altitude=30)
+    plan = plan_survey(c)
+    assert plan.min_safe_altitude <= plan.altitude <= 30
+    others = [plan_at_altitude(c, h) for h in (plan.min_safe_altitude, 25, 30)]
+    assert all(plan.est_time_s <= o.est_time_s * 1.02 for o in others if o)
 
 
 def test_speed_is_slowest_limit():
@@ -54,29 +69,31 @@ def test_speed_is_slowest_limit():
     assert plan.speed_reason == "motion blur"
 
 
-def test_lanes_cover_whole_area_with_overlap():
+def test_lanes_cover_area_across_with_overlap():
     c = cfg(area__corner_a=[-37, 10], area__corner_b=[81, 95])
     plan = plan_survey(c)
-    half = plan.footprint_across / 2
-    offsets = sorted({p[1] if plan.lane_axis == "x" else p[0] for p in plan.waypoints})
+    across = 1 if plan.lane_axis == "x" else 0
+    offsets = sorted(lane.start[across] for lane in plan.lanes)
     lo, hi = (10, 95) if plan.lane_axis == "x" else (-37, 81)
+    half = plan.band.swath_m / 2
     assert offsets[0] - half == pytest.approx(lo)
     assert offsets[-1] + half == pytest.approx(hi)
     for a, b in zip(offsets, offsets[1:]):
-        assert b - a <= plan.footprint_across * (1 - c["search"]["side_overlap"]) + 1e-9
+        assert b - a <= plan.band.swath_m * (1 - c["search"]["side_overlap"]) + 1e-9
+
+
+def test_lanes_are_shifted_back_so_the_band_covers_the_area_edges():
+    c = cfg(area__corner_a=[0, 0], area__corner_b=[300, 60])
+    plan = plan_survey(c)
+    assert plan.lane_axis == "x"
+    near = plan.band.near_m
+    first, second = plan.lanes[0], plan.lanes[1]
+    assert (first.start[0], first.end[0], first.heading_deg) == pytest.approx((0 - near, 300 - near, 0))
+    assert (second.start[0], second.end[0], second.heading_deg) == pytest.approx((300 + near, 0 + near, 180))
 
 
 def test_lanes_run_along_long_side():
-    plan = plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[300, 60]))
-    assert plan.lane_axis == "x"
+    assert plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[300, 60])).lane_axis == "x"
     plan = plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[60, 300]))
     assert plan.lane_axis == "y"
-
-
-def test_waypoints_alternate_direction():
-    plan = plan_survey(BASE)
-    for i in range(0, len(plan.waypoints) - 2, 2):
-        start, end, next_start = plan.waypoints[i], plan.waypoints[i + 1], plan.waypoints[i + 2]
-        axis = 0 if plan.lane_axis == "x" else 1
-        assert next_start[axis] == end[axis]
-        assert math.copysign(1, end[axis] - start[axis]) != math.copysign(1, plan.waypoints[i + 3][axis] - next_start[axis])
+    assert {lane.heading_deg for lane in plan.lanes} == {90, -90}

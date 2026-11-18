@@ -21,7 +21,8 @@ drone:
   turn_time_s: 3                # stopping, turning and accelerating at each lane end
 
 camera:
-  name: bottom_center           # downward camera; must match settings.json
+  name: bottom_center           # the camera used for the search; must match settings.json
+  tilt_deg: 45                  # below the horizon, looking along the lane; 90 = straight down
   hfov_deg: 60
   width_px: 1280
   height_px: 720
@@ -37,7 +38,7 @@ detector:
   tiles_y: 1                    #   resized to input_size, so small people keep their pixels
   tile_overlap: 0.2             # must exceed the largest person in pixels (lying, ~75 px at 25 m)
   fps_per_tile: 10              # detector throughput, tiles per second
-  person_size_m: 0.45           # smallest size of a person seen from above (shoulder width)
+  person_size_m: 0.45           # smallest size of a person in view (shoulder width)
   min_person_px: 12             # smallest person the detector finds reliably, in input pixels
 
 search:
@@ -47,3 +48,21 @@ search:
   side_overlap: 0.2             # overlap between neighbouring lanes
   max_blur_px: 1.0              # motion blur allowed during one exposure
   min_frames_per_point: 3       # frames every ground point must appear in
+
+confirm:
+  min_person_px: 40             # approach along the line of sight until a person is this big
+  min_altitude: 6               # never descend below this while confirming
+  speed: 2                      # along the line of sight, down and back up
+  frames: 8                     # N frames are checked at the confirm point ...
+  required: 5                   #   ... and the person must be found in k of them
+  frame_interval_s: 0.3
+  match_radius: 3.0             # a detection this close to the candidate counts as a hit
+  merge_radius: 6.0             # a new detection this close to a known one is the same person
+
+publish:
+  endpoint: tcp://*:5556        # ZeroMQ PUB socket; listen_victims.py subscribes to it
+  topic: /rescue/victims
+
+ground_truth:                   # tags of the people placed in the level, to measure position error
+  - Victim_01
+  - Victim_02
