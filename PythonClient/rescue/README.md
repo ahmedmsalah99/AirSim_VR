@@ -9,6 +9,7 @@ The drone searches a rectangle in a lawnmower pattern. The UGV and the confirm/p
 | `fly_survey.py` | Flies the plan in AirSim and draws it in the scene |
 | `detector.py` | Runs the YOLO11 ONNX person detector over image tiles |
 | `detect_once.py` | Tests the detector on one drone camera frame or an image file |
+| `compare_detectors.py` | Runs the `.pt` with Ultralytics and the ONNX pipeline on the same image, to check the pipeline |
 | `export_onnx.py` | Converts the YOLO11 `.pt` detector to ONNX |
 
 ## Setup
@@ -43,7 +44,11 @@ python detect_once.py --target Victim_01   # fly above that actor first (tag it 
 python detect_once.py --image some.png     # an image file, no AirSim needed
 ```
 
-It prints each detection's confidence and size in pixels and saves the image with boxes in `output/`. The image is split into `tiles_x` × `tiles_y` overlapping tiles (`detector` in `config.yaml`), each resized to the model's 640×640 input, so small people keep their pixels. The overlap must be bigger than the largest person in pixels; partial boxes from a neighbouring tile are merged into the full one.
+It prints each detection's confidence and size in pixels and saves the image with boxes in `output/`. To check the ONNX pipeline against Ultralytics itself on the same image (run it in the environment with `ultralytics` installed, e.g. the one used for `export_onnx.py`):
+
+```
+python compare_detectors.py --image output/<name>_raw.png --pt models/person_yolo11s.pt
+``` The image is split into `tiles_x` × `tiles_y` overlapping tiles (`detector` in `config.yaml`), each resized to the model's 640×640 input, so small people keep their pixels. The overlap must be bigger than the largest person in pixels; partial boxes from a neighbouring tile are merged into the full one.
 
 ## How the plan is computed
 
