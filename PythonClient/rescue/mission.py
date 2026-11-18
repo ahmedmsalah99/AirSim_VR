@@ -22,7 +22,8 @@ in another terminal, then:
 6. After the last lane it flies home and lands, and prints the position error
    against the tagged people in ground_truth (config.yaml).
 
-Ctrl+C stops the drone in a hover. A summary is saved in output/.
+Ctrl+C (or an error) ends the mission early: the drone flies home and lands; a
+second Ctrl+C lands it where it is. A summary is saved in output/.
 """
 import argparse
 from dataclasses import dataclass, field
@@ -143,19 +144,48 @@ class Mission:
                 self.log(f"lane {i + 1}/{plan.lane_count} at {plan.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")
                 self.sweep(self.at_altitude(lane.end), plan.speed, lane.heading_deg)
 
-            self.log("search complete, returning home")
-            self.goto(self.at_altitude(self.spawn[:2]), self.cfg["drone"]["transit_speed"], heading=None,
-                      what="return home")
-            c.landAsync(vehicle_name=self.name).join()
-            c.armDisarm(False, self.name)
-            self.log("landed")
+            self.log("search complete")
+            self.return_and_land()
         except KeyboardInterrupt:
-            self.log("stopped by user: hovering")
-            c.cancelLastTask(self.name)
-            c.hoverAsync(vehicle_name=self.name).join()
+            self.log("stopped by user")
+            self.abort()
+        except Exception as e:
+            self.log(f"ERROR: {e!r}")
+            try:
+                self.abort()
+            except Exception as again:  # e.g. the connection to AirSim is gone
+                self.log(f"couldn't return home either: {again!r}")
+            raise
         finally:
-            self.camera.set_tilt(STRAIGHT_DOWN)
+            try:
+                self.camera.set_fov(self.cfg["camera"]["hfov_deg"])
+                self.camera.set_tilt(STRAIGHT_DOWN)
+            except Exception as e:
+                self.log(f"couldn't reset the camera: {e!r}")
             self.report()
+
+    def return_and_land(self):
+        self.log("returning home")
+        self.goto(self.at_altitude(self.spawn[:2]), self.cfg["drone"]["transit_speed"], heading=None,
+                  what="return home")
+        self.land()
+
+    def land(self):
+        self.client.landAsync(timeout_sec=60, vehicle_name=self.name).join()
+        self.client.armDisarm(False, self.name)
+        self.log("landed")
+
+    def abort(self):
+        """Stopped early: fly home at the current altitude and land there (not into whatever is
+        below). A second Ctrl+C while it's on the way lands it where it is."""
+        c = self.client
+        c.cancelLastTask(self.name)
+        try:
+            self.return_and_land()
+        except KeyboardInterrupt:
+            self.log("stopped again: landing here")
+            c.cancelLastTask(self.name)
+            self.land()
 
     def at_altitude(self, xy_world):
         x, y = self.to_local(xy_world)

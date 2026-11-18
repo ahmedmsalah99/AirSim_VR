@@ -42,7 +42,7 @@ Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). 
    python mission.py               # search, confirm, publish
    python mission.py --no-detect   # only fly the search pattern
    ```
-   The area (orange) and the lanes (green) are drawn in the scene; confirmed victims are marked green and rejected candidates red, a few metres above the spot. Candidates aren't marked before they're decided: the camera sees debug drawings, and a marker on a person would hide them. Ctrl+C stops the drone in a hover. At the end it prints each victim's position and its error against the tagged people, and saves a summary (`output/mission_<time>.json`).
+   The area (orange) and the lanes (green) are drawn in the scene; confirmed victims are marked green and rejected candidates red, a few metres above the spot. Candidates aren't marked before they're decided: the camera sees debug drawings, and a marker on a person would hide them. Ctrl+C (or an error) ends the mission early: the drone flies home at its current altitude and lands; a second Ctrl+C lands it where it is. At the end it prints each victim's position and its error against the tagged people, and saves a summary (`output/mission_<time>.json`).
    The window at the bottom of the viewport shows the drone's camera; press `1` in the viewport to hide or show it.
 
 ## How the plan is computed

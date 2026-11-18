@@ -179,7 +179,7 @@ def test_person_is_confirmed_published_once_and_the_lane_resumes(mission):
     assert hits == frames == cfg["confirm"]["frames"]
     assert world[:2] == pytest.approx(PERSON[:2] + SPAWN[:2])  # median of the ground projections
     assert m.camera.depth_grabs == 0  # depth is off by default (slow in AirSim)
-    zoom, unzoom = m.camera.fovs
+    zoom, unzoom = m.camera.fovs[:2]  # (the mission resets the zoom once more at the end)
     assert zoom < cfg["camera"]["hfov_deg"] and unzoom == cfg["camera"]["hfov_deg"]
 
     confirm_moves = [p for p, v in m.client.moves if v == cfg["confirm"]["speed"]]
@@ -227,3 +227,64 @@ def test_depth_is_used_once_when_enabled(mission):
     m.run()
     assert m.camera.depth_grabs == 1
     assert PUBLISHED[0][1][:2] == pytest.approx(PERSON[:2] + SPAWN[:2] + [0.2, -0.1])
+
+
+class Interrupt(FakeCamera):
+    """Ctrl+C on the 3rd frame."""
+    fired = False
+
+    def __init__(self, client, airsim, cfg):
+        super().__init__(client, airsim, cfg)
+        self.grabs = 0
+
+    def grab(self, with_depth=False):
+        self.grabs += 1
+        if self.grabs == 3:
+            Interrupt.fired = True
+            raise KeyboardInterrupt
+        return super().grab(with_depth)
+
+
+class SecondInterrupt(FakeClient):
+    """Ctrl+C again on the first move after the first one (the flight home)."""
+
+    def __init__(self, port):
+        super().__init__(port)
+        self.stopped_at = None
+
+    def moveToPositionAsync(self, x, y, z, v, **kw):
+        if Interrupt.fired and self.stopped_at is None:
+            self.stopped_at = self.pos.copy()
+            raise KeyboardInterrupt
+        return super().moveToPositionAsync(x, y, z, v, **kw)
+
+
+def run_interrupted(mod, cfg, client=FakeClient):
+    from survey_plan import plan_survey
+    Interrupt.fired = False
+    mod.DroneCamera = Interrupt
+    mod.airsim.MultirotorClient = client
+    try:
+        m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+        m.run()
+    finally:
+        mod.airsim.MultirotorClient = FakeClient
+    return m
+
+
+def test_ctrl_c_flies_home_and_lands(mission, capsys):
+    mod, cfg = mission
+    m = run_interrupted(mod, cfg)
+    out = capsys.readouterr().out
+    assert "stopped by user" in out and "returning home" in out and "landed" in out
+    assert m.client.pos == pytest.approx([0, 0, GROUND_Z])        # home, on the ground
+    assert m.camera.fovs[-1] == cfg["camera"]["hfov_deg"]         # zoom reset
+
+
+def test_second_ctrl_c_lands_where_it_is(mission, capsys):
+    mod, cfg = mission
+    m = run_interrupted(mod, cfg, SecondInterrupt)
+    out = capsys.readouterr().out
+    assert "stopped again: landing here" in out and "landed" in out
+    assert m.client.pos[:2] == pytest.approx(m.client.stopped_at[:2])  # landed where it was stopped
+    assert m.client.pos[2] == pytest.approx(GROUND_Z)
