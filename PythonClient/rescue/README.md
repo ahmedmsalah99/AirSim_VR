@@ -7,12 +7,14 @@ The drone searches a rectangle in a lawnmower pattern. The UGV and the confirm/p
 | `config.yaml` | Search area, drone limits, camera and detector parameters |
 | `survey_plan.py` | Computes altitude, lane spacing, speed and waypoints, and explains each choice |
 | `fly_survey.py` | Flies the plan in AirSim and draws it in the scene |
+| `detector.py` | Runs the YOLO11 ONNX person detector over image tiles |
+| `detect_once.py` | Tests the detector on one drone camera frame or an image file |
 | `export_onnx.py` | Converts the YOLO11 `.pt` detector to ONNX |
 
 ## Setup
 
 ```
-pip install msgpack-rpc-python numpy pyyaml
+pip install msgpack-rpc-python numpy pyyaml onnxruntime opencv-python
 ```
 
 Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). Its `CameraDefaults` give every camera, including the drone's `bottom_center`, 1280×720 images with a 60° field of view, which the plan assumes. Don't configure cameras under `Vehicles` → `Cameras`: in this AirSim version that spawns a new camera actor and crashes on Play. The settings also spawn the drone 4 m east of the Husky so it doesn't land on it.
@@ -30,6 +32,18 @@ Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level READM
    ```
    The area (orange) and the lanes (green) are drawn in the scene. Ctrl+C stops the drone in a hover.
    The window at the bottom of the viewport shows the drone's downward camera; press `1` in the viewport to hide or show it.
+
+## Testing the detector
+
+Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). Then, with Play running:
+
+```
+python detect_once.py                      # one frame from where the drone is now
+python detect_once.py --target Victim_01   # fly above that actor first (tag it Victim_01 in the editor)
+python detect_once.py --image some.png     # an image file, no AirSim needed
+```
+
+It prints each detection's confidence and size in pixels and saves the image with boxes in `output/`. The image is split into `tiles_x` × `tiles_y` overlapping tiles (`detector` in `config.yaml`), each resized to the model's 640×640 input, so small people keep their pixels. The overlap must be bigger than the largest person in pixels; partial boxes from a neighbouring tile are merged into the full one.
 
 ## How the plan is computed
 

@@ -63,14 +63,19 @@ def camera_footprint(altitude, hfov_deg, width_px, height_px):
     return 2 * altitude * half_h, 2 * altitude * half_v
 
 
+def tile_size(length, tiles, overlap):
+    """Size of each of `tiles` equal tiles that cover `length` with neighbours overlapping by `overlap`."""
+    return length / (1 + (tiles - 1) * (1 - overlap))
+
+
 def detector_width_px(cam, det):
     """Image width in pixels as the detector sees it.
 
     Each tile is resized to fit det['input_size'], so a 1280 px image read as
     one tile reaches a 640 px detector at half resolution.
     """
-    tile_w = cam["width_px"] / det["tiles_x"]
-    tile_h = cam["height_px"] / det["tiles_y"]
+    tile_w = tile_size(cam["width_px"], det["tiles_x"], det["tile_overlap"])
+    tile_h = tile_size(cam["height_px"], det["tiles_y"], det["tile_overlap"])
     scale = min(1.0, det["input_size"] / max(tile_w, tile_h))
     return cam["width_px"] * scale
 
