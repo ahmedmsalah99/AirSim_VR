@@ -1,4 +1,8 @@
-"""set_tilt against a fake AirSim whose camera pitch sign is flipped and whose drone sways."""
+"""set_tilt against a fake AirSim whose downward camera is mounted at -90 deg, like AirSim's.
+
+With that mounting, pitch p gives a tilt of 90 - p: at 45 deg the wrong mapping "pitch = t"
+looks right, which is what fooled a calibration done at one tilt only.
+"""
 import math
 import sys
 import types
@@ -14,13 +18,12 @@ from drone_camera import DroneCamera  # noqa: E402
 
 
 def quat(pitch, roll, yaw):
-    """airsim.to_quaternion, keeping its arguments so the fake can reinterpret them."""
+    """Same formula as airsim.to_quaternion."""
     t0, t1 = math.cos(yaw / 2), math.sin(yaw / 2)
     t2, t3 = math.cos(roll / 2), math.sin(roll / 2)
     t4, t5 = math.cos(pitch / 2), math.sin(pitch / 2)
     return types.SimpleNamespace(w_val=t0 * t2 * t4 + t1 * t3 * t5, x_val=t0 * t3 * t4 - t1 * t2 * t5,
-                                 y_val=t0 * t2 * t5 + t1 * t3 * t4, z_val=t1 * t2 * t4 - t0 * t3 * t5,
-                                 args=(pitch, roll, yaw))
+                                 y_val=t0 * t2 * t5 + t1 * t3 * t4, z_val=t1 * t2 * t4 - t0 * t3 * t5)
 
 
 def mul(a, b):
@@ -30,9 +33,10 @@ def mul(a, b):
                                  y_val=w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, z_val=w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2)
 
 
-class FakeClient:
-    """The camera's relative rotation is the requested one with the pitch sign flipped."""
+MOUNT = quat(-math.pi / 2, 0, 0)  # the downward camera's own -90 deg pitch
 
+
+class FakeClient:
     def __init__(self):
         self.body = quat(0, 0, 0)
         self.applied = quat(0, 0, 0)
@@ -42,12 +46,8 @@ class FakeClient:
         self.applied = q
 
     def simGetCameraInfo(self, camera, vehicle_name):
-        if self.broken:
-            rel = quat(0, 0, 0)  # the camera ignores every request
-        else:
-            p, r, y = self.applied.args
-            rel = quat(-p, r, y)
-        return types.SimpleNamespace(pose=types.SimpleNamespace(orientation=mul(self.body, rel)))
+        rel = quat(0, 0, 0) if self.broken else self.applied  # broken: the camera ignores requests
+        return types.SimpleNamespace(pose=types.SimpleNamespace(orientation=mul(mul(self.body, MOUNT), rel)))
 
     def getMultirotorState(self, vehicle_name):
         return types.SimpleNamespace(kinematics_estimated=types.SimpleNamespace(orientation=self.body))
@@ -58,45 +58,57 @@ CFG = {"camera": {"name": "bottom_center", "width_px": 1280, "height_px": 720, "
 
 
 def looks(client, tilt_deg):
+    """cos of the angle between where the camera looks and tilt_deg below the horizon, ahead."""
     cam = client.simGetCameraInfo("", "").pose.orientation
     t = math.radians(tilt_deg)
-    want = rotate(client.body, (math.cos(t), 0, math.sin(t)))
-    return np.dot(rotate(cam, (1, 0, 0)), want)
+    return np.dot(rotate(cam, (1, 0, 0)), rotate(client.body, (math.cos(t), 0, math.sin(t))))
 
 
-def test_convention_is_found_once_then_applied_even_if_the_read_back_disagrees(capsys):
+def camera(client):
+    return DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
+
+
+def test_calibration_finds_the_mapping_that_works_at_every_tilt():
     client = FakeClient()
-    cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
-
+    cam = camera(client)
     assert cam.set_tilt(45)
-    assert cam.convention[0] == 1          # the fake flips the pitch sign, so +pitch looks down
-    assert looks(client, 45) > 0.99
+    sign, offset, _, _ = cam.convention
+    assert (sign, offset) == (-1, pytest.approx(math.pi / 2))  # pitch = 90 - t
+    for tilt in (45, 63, 70, 30, 89.5):
+        assert cam.set_tilt(tilt)
+        assert looks(client, tilt) > 0.99, tilt
 
-    client.body = quat(math.radians(10), math.radians(-5), math.radians(90))  # braking and turned east
+
+def test_tilts_hold_while_the_drone_sways_and_turns():
+    client = FakeClient()
+    cam = camera(client)
+    assert cam.set_tilt(45)
+    client.body = quat(math.radians(6), math.radians(-4), math.radians(90))
     assert cam.set_tilt(64)
-    assert looks(client, 64) > 0.95
+    assert looks(client, 64) > 0.99
 
-    client.broken = True                   # the read-back no longer matches what was applied
-    assert cam.set_tilt(30)
-    assert client.applied.args == pytest.approx((math.radians(30), 0, 0))
-    assert "disagrees" in capsys.readouterr().out
+
+def test_a_camera_that_ignores_requests_is_reported(capsys):
+    client = FakeClient()
+    cam = camera(client)
+    assert cam.set_tilt(45)
+    client.broken = True
+    assert not cam.set_tilt(30)
+    assert "couldn't tilt" in capsys.readouterr().out
 
 
 def test_no_convention_found_returns_false():
     client = FakeClient()
     client.broken = True
-    cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
+    cam = camera(client)
     assert not cam.set_tilt(45)
     assert cam.convention is None
 
 
 def test_depth_point_scales_pixels_to_a_smaller_depth_image():
-    client = FakeClient()
-    cam = DroneCamera(client, types.SimpleNamespace(to_quaternion=quat), CFG)
+    cam = camera(FakeClient())
     depth = np.full((180, 320), 50.0, np.float32)
-    depth[135, 240] = 10.0                     # image pixel (960, 540) in a 1280x720 frame
-    depth[134:137, 239:242] = 10.0
+    depth[134:137, 239:242] = 10.0             # around image pixel (960, 540) of a 1280x720 frame
     frame = types.SimpleNamespace(depth=depth, pos=np.zeros(3), q=quat(0, 0, 0), intr=cam.intr)
-    p = cam.depth_point(frame, 960, 540)
-    assert p[0] == pytest.approx(10.0)         # planar depth along the camera's forward axis
+    assert cam.depth_point(frame, 960, 540)[0] == pytest.approx(10.0)  # planar depth along the forward axis
     assert cam.depth_point(frame, 100, 100)[0] == pytest.approx(50.0)

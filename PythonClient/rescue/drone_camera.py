@@ -11,12 +11,16 @@ from camera_geometry import Intrinsics, depth_point, ground_point, rotate
 # image comes back rotated about the view axis. Half a degree off avoids it.
 STRAIGHT_DOWN = 89.5
 MAX_DEPTH_M = 500  # farther than this is sky
-# simSetCameraOrientation's pitch sign and the camera's mounting aren't documented for this
-# AirSim version; one of these (pitch sign, roll, yaw) combinations points it the way we want.
-CONVENTIONS = [(sign, roll, yaw) for sign in (-1, 1)
+# How a wanted tilt t maps to simSetCameraOrientation(to_quaternion(pitch, roll, yaw)) isn't
+# documented for this AirSim version: the pitch sign, and the camera's own mounting (the
+# downward camera is already turned -90 deg, so pitch p gives a tilt of 90 - p). One of these
+# (pitch sign, pitch offset, roll, yaw) combinations, pitch = sign * t + offset, is right.
+CONVENTIONS = [(sign, offset, roll, yaw) for sign in (-1, 1) for offset in (0, math.pi / 2, -math.pi / 2)
                for roll, yaw in ((0, 0), (math.pi, math.pi), (0, math.pi), (math.pi, 0))]
-FIND_TOLERANCE = 0.98   # cos of the allowed error while finding the convention (~11 deg)
-REUSE_TOLERANCE = 0.95  # later read-backs further off than this (~18 deg) are reported
+# Two tilts are needed to tell the conventions apart: at 45 deg, "t" and "90 - t" coincide.
+CALIBRATION_TILTS_DEG = (60, 30)
+FIND_TOLERANCE = 0.98   # cos of the allowed error while calibrating (~11 deg)
+REUSE_TOLERANCE = 0.95  # in flight, allow for the drone swaying while it's read back (~18 deg)
 
 
 @dataclass
@@ -41,29 +45,31 @@ class DroneCamera:
     def set_tilt(self, tilt_deg):
         """Point the camera tilt_deg below the horizon, straight ahead of the drone, image upright.
 
-        simSetCameraOrientation's pitch sign and the camera's mounting aren't documented for
-        this AirSim version, and a pitch angle can't tell "45 deg down, forward" from "135 deg
-        down, backwards, upside down". So the first call tries each convention and keeps the
-        one whose actual forward and up directions, read back from AirSim, are right (best
-        done with the drone still on the ground). Later calls apply that convention directly:
-        it's a rotation relative to the drone, so it holds for any tilt, and the read-back
-        check proved unreliable in flight. A disagreeing read-back is only printed.
-        Returns whether the tilt was set.
+        The first call calibrates: it finds the convention (see CONVENTIONS) that gives the
+        right forward and up directions, read back from AirSim, at two different tilts (best
+        with the drone still on the ground). Later calls apply that convention and check the
+        read-back again with a looser tolerance; if it disagrees, every convention is tried
+        for this tilt. Returns whether the camera ended up pointing the right way.
         """
         t = math.radians(min(tilt_deg, STRAIGHT_DOWN))
-        if self.convention is not None:
-            q = self._quat(t, self.convention)
-            self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.vehicle)
-            fwd, up = self._agreement(t)
-            if min(fwd, up) < REUSE_TOLERANCE:
-                print(f"note: camera read-back after tilting to {tilt_deg:.0f} deg disagrees "
-                      f"(forward {math.degrees(math.acos(min(fwd, 1))):.0f} deg off, "
-                      f"up {math.degrees(math.acos(min(up, 1))):.0f} deg off); using it anyway")
+        if self.convention is None and not self.calibrate():
+            return False
+        if self._apply(t, self.convention, REUSE_TOLERANCE):
             return True
         for convention in CONVENTIONS:
-            q = self._quat(t, convention)
-            self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.vehicle)
-            if min(self._agreement(t)) > FIND_TOLERANCE:
+            if self._apply(t, convention, REUSE_TOLERANCE):
+                print(f"note: the camera tilt convention changed at {tilt_deg:.0f} deg; using the new one")
+                self.convention = convention
+                return True
+        fwd, up = self._agreement(t)
+        print(f"WARNING: couldn't tilt the camera to {tilt_deg:.0f} deg (read-back: forward "
+              f"{math.degrees(math.acos(min(fwd, 1))):.0f} deg off, up {math.degrees(math.acos(min(up, 1))):.0f} deg off)")
+        return False
+
+    def calibrate(self):
+        """Find the convention that's right at every calibration tilt."""
+        for convention in CONVENTIONS:
+            if all(self._apply(math.radians(t), convention, FIND_TOLERANCE) for t in CALIBRATION_TILTS_DEG):
                 self.convention = convention
                 return True
         return False
@@ -73,9 +79,11 @@ class DroneCamera:
         self.client.simSetCameraFov(self.camera, fov_deg, vehicle_name=self.vehicle)
         self.intr = Intrinsics(self.cam["width_px"], self.cam["height_px"], fov_deg)
 
-    def _quat(self, t, convention):
-        sign, roll, yaw = convention
-        return self.airsim.to_quaternion(sign * t, roll, yaw)
+    def _apply(self, t, convention, tolerance):
+        sign, offset, roll, yaw = convention
+        q = self.airsim.to_quaternion(sign * t + offset, roll, yaw)
+        self.client.simSetCameraOrientation(self.camera, q, vehicle_name=self.vehicle)
+        return min(self._agreement(t)) > tolerance
 
     def _agreement(self, t):
         """cos of the angle between the camera's actual forward/up and the wanted ones."""
