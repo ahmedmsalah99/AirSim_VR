@@ -7,15 +7,15 @@
 # Heights are metres above the ground at the drone's takeoff point.
 
 area:
-  corner_a: [-60, -60]          # any two opposite corners of the search rectangle
-  corner_b: [60, 60]
+  corner_a: [-40, -40]          # any two opposite corners of the search rectangle
+  corner_b: [40, 40]
   max_obstacle_height: 15       # tallest building or tree inside the rectangle
 
 drone:
   name: Drone1
   port: 41451
   spawn_ned: [0, 4, -5]         # must match Vehicles.Drone1 X, Y, Z in settings.json
-  max_speed: 10                 # what SimpleFlight tracks reliably
+  max_speed: 5                  # faster overshoots the lane ends
   climb_speed: 3
   transit_speed: 8
   turn_time_s: 3                # stopping, turning and accelerating at each lane end
@@ -28,9 +28,14 @@ camera:
   exposure_s: 0.001             # a real camera's exposure; bounds speed by motion blur
 
 detector:
+  model: models/person_yolo11s.onnx  # relative to this folder
+  person_class: 0
+  conf_threshold: 0.25
+  iou_threshold: 0.45           # boxes overlapping more than this are merged (NMS)
   input_size: 640               # YOLO11 input
   tiles_x: 2                    # the image is split into tiles_x * tiles_y tiles, each
   tiles_y: 1                    #   resized to input_size, so small people keep their pixels
+  tile_overlap: 0.2             # must exceed the largest person in pixels (lying, ~75 px at 25 m)
   fps_per_tile: 10              # detector throughput, tiles per second
   person_size_m: 0.45           # smallest size of a person seen from above (shoulder width)
   min_person_px: 12             # smallest person the detector finds reliably, in input pixels
@@ -38,7 +43,7 @@ detector:
 search:
   safety_margin: 5              # above the tallest obstacle
   min_altitude: 10
-  max_altitude: 60
+  max_altitude: 25
   side_overlap: 0.2             # overlap between neighbouring lanes
   max_blur_px: 1.0              # motion blur allowed during one exposure
   min_frames_per_point: 3       # frames every ground point must appear in
