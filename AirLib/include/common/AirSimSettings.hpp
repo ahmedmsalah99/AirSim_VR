@@ -1011,8 +1011,8 @@ private:
     {
         subwindow_settings.clear();
         subwindow_settings.push_back(SubwindowSetting(0, ImageType::DepthVis, false, "")); //depth
-        subwindow_settings.push_back(SubwindowSetting(0, ImageType::Segmentation, false, "")); //seg
-        subwindow_settings.push_back(SubwindowSetting(0, ImageType::Scene, false, "")); //vis
+        subwindow_settings.push_back(SubwindowSetting(1, ImageType::Segmentation, false, "")); //seg
+        subwindow_settings.push_back(SubwindowSetting(2, ImageType::Scene, false, "")); //vis
     }
 
     void loadOtherSettings(const Settings& settings_json)
