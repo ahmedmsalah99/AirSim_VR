@@ -1,3 +1,81 @@
+# AirSim_VR: drone + UGV rescue sim
+
+This fork of AirSim adds a `Both` sim mode that runs a drone and a ground vehicle (the Husky UGV) in the same Unreal level, each with its own API port:
+
+| Vehicle | Name in `settings.json` | Python client | Port |
+|---|---|---|---|
+| Drone | `Drone1` | `airsim.MultirotorClient(port=41451)` | 41451 |
+| UGV (Husky body on the AirSim car) | `Car1` | `airsim.CarClient(port=41452)` | 41452 |
+
+The Unreal project is `Unreal/Environments/Blocks` (UE 4.24). It opens on the `Rural_Cabins` map, and the Husky assets are in `Content/Husky`.
+
+The sections below are for Windows. The original AirSim README follows them.
+
+## Requirements
+
+- Unreal Engine **4.24**, installed from the Epic launcher to `C:\Program Files\Epic Games\UE_4.24`.
+- Visual Studio **2019** with the "Desktop development with C++" workload. The default VS 2019 toolset is enough, VS 2017 (v141) is not needed.
+- Python 3 with `pip install msgpack-rpc-python numpy`. The scripts in `PythonClient/both` use the `airsim` package from this repo, so there's no need to `pip install airsim`.
+
+## First-time setup
+
+1. Copy `settings.json` from the repo root to where AirSim reads it. AirSim never reads the copy in the repo.
+   ```
+   mkdir "%USERPROFILE%\Documents\AirSim"
+   copy settings.json "%USERPROFILE%\Documents\AirSim\settings.json"
+   ```
+   If your Documents folder is synced to OneDrive, use `%USERPROFILE%\OneDrive\Documents\AirSim` in both lines instead.
+2. Do the full build below.
+
+## What to rebuild after a change
+
+After a `git pull`, look at which files changed (`git diff --stat HEAD@{1}`) and do the matching row. When several rows apply, do the one highest in the table.
+
+| What changed | What to do |
+|---|---|
+| `AirLib/`, `Unreal/Plugins/AirSim/`, `MavLinkCom/` or `build.cmd` (C++) | **Full build** (all 3 steps below) |
+| `Unreal/Environments/Blocks/Source/` (C++ of the project) | Steps 2 and 3 |
+| Maps, Blueprints, meshes (`.umap`, `.uasset` in `Content/`) | Nothing to build. Open the editor (step 3). Close it first if it's open |
+| `settings.json` | Copy it to `Documents\AirSim` again (first-time setup, step 1), then restart Play |
+| Python scripts | Nothing. Run them |
+
+### Full build
+
+Close the Unreal editor first.
+
+1. **Build AirLib and the plugin.** Use the **"x64 Native Tools Command Prompt for VS 2019"** from the Start menu; `build.cmd` refuses to run in a normal terminal.
+   ```
+   cd /d %USERPROFILE%\Projects\AirSim_VR
+   build.cmd
+   ```
+2. **Copy the plugin into Blocks and regenerate the project files.**
+   ```
+   cd Unreal\Environments\Blocks
+   update_from_git.bat
+   ```
+   This mirrors `Unreal/Plugins/AirSim` and `AirLib` into `Blocks/Plugins/AirSim`. It then deletes `Binaries`, `Intermediate`, `Saved` and `Blocks.sln` and regenerates the project files. Assets in `Blocks/Content` are not touched. It should print `Using ...\UE_4.24\Engine\Binaries\DotNET\UnrealBuildTool.exe`.
+3. **Compile and open the editor.** Double-click `Blocks.uproject` and answer **Yes** when it asks to rebuild the missing modules. If that rebuild fails, open `Blocks.sln` in Visual Studio and build **Development Editor / Win64** to see the actual compile error.
+
+## How to run
+
+1. Make sure `Documents\AirSim\settings.json` matches the repo's `settings.json`.
+2. Open `Blocks.uproject` and press **Play**. The API ports only open while Play is running.
+3. In another terminal, with your Python environment active:
+   ```
+   python %USERPROFILE%\Projects\AirSim_VR\PythonClient\both\multi_agent_drone_car.py
+   ```
+
+## Troubleshooting
+
+- **`WSAECONNREFUSED` from Python:** nothing is listening on the ports. Check that Play is running, then run `netstat -ano | findstr 4145`; you should see both 41451 and 41452. If they're missing, AirSim failed to start. Look for a popup in Unreal or red lines in **Window → Developer Tools → Output Log**. Common causes:
+  - `settings.json` is missing from `Documents\AirSim`, or doesn't have `"SimMode": "Both"`.
+  - The plugin wasn't rebuilt after a C++ change.
+- **The car is the SUV instead of the Husky:** the `settings.json` in `Documents\AirSim` is missing the `PawnPaths` block and `"PawnPath": "DefaultCar"`. Copy it from the repo again.
+- **`MSB8020 ... v141 cannot be found`:** `build.cmd` was changed to force the VS 2017 toolset. Keep it on the default VS 2019 toolset.
+- **"Failed to generate project files ... UnrealBuildTool.exe":** `Unreal/Environments/Blocks/GenerateProjectFiles.bat` must be the version that calls the engine's UnrealBuildTool directly, as on `rescue-dev`, not the one that goes through `UnrealVersionSelector`.
+
+---
+
 # Welcome to AirSim
 
 AirSim is a simulator for drones, cars and more, built on [Unreal Engine](https://www.unrealengine.com/) (we now also have an experimental [Unity](https://unity3d.com/) release). It is open-source, cross platform, and supports hardware-in-loop with popular flight controllers such as PX4 for physically and visually realistic simulations. It is developed as an Unreal plugin that can simply be dropped into any Unreal environment. Similarly, we have an experimental release for a Unity plugin.
