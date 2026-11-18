@@ -16,6 +16,7 @@
     },
     "Drone1": {
       "VehicleType": "SimpleFlight",
+      "IsFpvVehicle": true,
       "X": 0,
       "Y": 4,
       "Z": -5,
@@ -39,5 +40,13 @@
         }
       }
     }
-  }
+  },
+  "SubWindows": [
+    {
+      "WindowID": 0,
+      "CameraName": "bottom_center",
+      "ImageType": 0,
+      "Visible": true
+    }
+  ]
 }
