@@ -11,12 +11,14 @@ in another terminal, then:
    person's feet pixel is projected onto the (flat) ground to a position.
 3. A person not seen before interrupts the lane. The drone turns to face them,
    tilts the camera to the line-of-sight angle, and descends along the line of
-   sight (the path it just saw them through) until they are confirm.min_person_px
-   tall, but no lower than confirm.min_altitude.
+   sight (the path it just saw them through) towards where they'd be
+   confirm.min_person_px tall, but never below the tallest obstacle plus
+   confirm.clearance. The camera zooms in for the rest.
 4. It hovers and checks N frames. If the person is found near the same spot in
-   k of them, the position measured with the depth camera is published over
-   ZeroMQ and marked green in the scene; otherwise the candidate is rejected (red).
-5. It climbs back along the same line to where it stopped and carries on.
+   k of them, their position is published over ZeroMQ and marked green in the
+   scene; otherwise the candidate is rejected (red).
+5. It zooms back out, climbs back along the same line to where it stopped and
+   carries on.
 6. After the last lane it flies home and lands, and prints the position error
    against the tagged people in ground_truth (config.yaml).
 
@@ -37,8 +39,8 @@ import airsim
 
 from camera_geometry import confirm_viewpoint
 from drone_camera import STRAIGHT_DOWN, DroneCamera
-from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_px, format_plan, load_config,
-                         plan_survey)
+from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_px, format_plan, fov_for_pixels,
+                         load_config, plan_survey)
 
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
@@ -224,27 +226,40 @@ class Mission:
         return False
 
     def confirm(self, cand):
-        """Approach along the line of sight, check k of N frames, publish, and climb back."""
+        """Approach along the line of sight (staying above obstacles), zoom, check k of N frames,
+        publish, and return to where the lane was left."""
         c, conf = self.client, self.cfg["confirm"]
         stop = self.position()
         c.hoverAsync(vehicle_name=self.name).join()
 
+        # Descend along the line of sight towards the distance where the person is min_person_px,
+        # but never below the tallest obstacle plus clearance: there's no obstacle map, and trees
+        # and roofs stand around people. Zooming the camera makes up the rest.
         cam, det = self.cfg["camera"], self.cfg["detector"]
         distance = det["person_size_m"] * focal_px(cam) * detector_scale(cam, det) / conf["min_person_px"]
-        point, heading, tilt = confirm_viewpoint(stop, cand.seen_at, distance, self.ground_z - conf["min_altitude"])
-        self.log(f"confirming {cand.id}: line of sight {tilt:.0f} deg down, approaching to "
-                 f"{np.linalg.norm(point - cand.seen_at):.1f} m from it, {self.ground_z - point[2]:.1f} m up")
+        lowest_z = self.ground_z - (self.cfg["area"]["max_obstacle_height"] + conf["clearance"])
+        point, heading, tilt = confirm_viewpoint(stop, cand.seen_at, distance, lowest_z)
+        range_m = float(np.linalg.norm(point - cand.seen_at))
+        fov = min(cam["hfov_deg"], max(conf["min_fov_deg"], fov_for_pixels(cam, det, range_m, conf["min_person_px"])))
+        moves = np.linalg.norm(point - stop) > ARRIVE_RADIUS
+        self.log(f"confirming {cand.id}: line of sight {tilt:.0f} deg down, "
+                 + (f"approaching to {range_m:.1f} m from it, {self.ground_z - point[2]:.1f} m up"
+                    if moves else f"staying at {range_m:.1f} m from it")
+                 + (f", zooming to {fov:.0f} deg" if fov < cam["hfov_deg"] else ""))
 
         self.face(heading)
         if not self.camera.set_tilt(tilt):
             self.log("WARNING: couldn't tilt the camera to the line of sight; keeping the search tilt")
-        self.goto(point, conf["speed"], heading, what="approach")
+        if moves:
+            self.goto(point, conf["speed"], heading, what="approach")
+        if fov < cam["hfov_deg"]:
+            self.camera.set_fov(fov)
         c.hoverAsync(vehicle_name=self.name).join()
         time.sleep(1)  # settle so frames aren't tilted
 
         # Hit or miss per frame from the scene image and the flat-ground projection: fast.
-        # Float depth images are very slow through AirSim's Python client, so depth is fetched
-        # once, for the final position of a confirmed person.
+        # Float depth images are very slow through AirSim's Python client, so depth is optional
+        # and fetched at most once, for the final position of a confirmed person.
         positions, confidences = [], []
         for i in range(conf["frames"]):
             frame = self.camera.grab()
@@ -266,10 +281,10 @@ class Mission:
             pts = np.array(positions)
             cand.status, cand.position = "confirmed", np.median(pts, axis=0)
             cand.std = np.maximum(pts.std(axis=0), 0.05)
-            measured = self.depth_position(cand.position, conf["match_radius"])
+            measured = self.depth_position(cand.position, conf["match_radius"]) if conf["use_depth"] else None
             if measured is not None:
                 cand.position = measured
-            source = "depth camera" if measured is not None else "ground projection"
+            source = "depth camera" if measured is not None else f"ground projection, median of {cand.hits}"
             w = self.to_world(cand.position)
             self.log(f"CONFIRMED victim {cand.id} at x={w[0]:.1f} y={w[1]:.1f} ({cand.hits}/{cand.frames} frames, "
                      f"position from the {source})")
@@ -281,8 +296,11 @@ class Mission:
                      f"{conf['required']} needed")
             self.mark(cand.seen_at, REJECTED_COLOR, f"x{cand.id}")
 
-        self.log("climbing back to the lane")
-        self.goto(stop, conf["speed"], heading, what="climb back")
+        if fov < cam["hfov_deg"]:
+            self.camera.set_fov(cam["hfov_deg"])
+        if moves:
+            self.log("climbing back to the lane")
+            self.goto(stop, conf["speed"], heading, what="climb back")
         if not self.camera.set_tilt(self.plan.tilt_deg):
             self.log("WARNING: couldn't restore the camera tilt")
 

@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from survey_plan import (InfeasiblePlan, detection_range, load_config, plan_at_altitude, plan_survey,  # noqa: E402
-                         vertical_fov, view_band)
+from survey_plan import (InfeasiblePlan, detection_range, fov_for_pixels, load_config, plan_at_altitude,  # noqa: E402
+                         plan_survey, vertical_fov, view_band)
 
 BASE = load_config()
 
@@ -97,3 +97,12 @@ def test_lanes_run_along_long_side():
     plan = plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[60, 300]))
     assert plan.lane_axis == "y"
     assert {lane.heading_deg for lane in plan.lanes} == {90, -90}
+
+
+def test_zoom_fov_gives_the_wanted_person_size():
+    c = cfg()
+    fov = fov_for_pixels(c["camera"], c["detector"], distance=25, person_px=40)
+    zoomed = dict(c["camera"], hfov_deg=fov)
+    assert detection_range(zoomed, dict(c["detector"], min_person_px=40)) == pytest.approx(25)
+    assert fov_for_pixels(c["camera"], c["detector"], detection_range(c["camera"], c["detector"]),
+                          c["detector"]["min_person_px"]) == pytest.approx(c["camera"]["hfov_deg"])

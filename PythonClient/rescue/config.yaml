@@ -50,9 +50,11 @@ search:
   min_frames_per_point: 3       # frames every ground point must appear in
 
 confirm:
-  min_person_px: 40             # approach along the line of sight until a person is this big
-  min_altitude: 6               # never descend below this while confirming
+  min_person_px: 40             # approach and zoom until a person is this big
+  clearance: 3                  # never descend below max_obstacle_height + this while confirming
+  min_fov_deg: 10               # the camera can zoom in to this horizontal field of view
   speed: 2                      # along the line of sight, down and back up
+  use_depth: false              # measure a confirmed person with the depth camera (slow in AirSim)
   frames: 8                     # N frames are checked at the confirm point ...
   required: 5                   #   ... and the person must be found in k of them
   frame_interval_s: 0.3

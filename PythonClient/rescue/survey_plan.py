@@ -100,6 +100,12 @@ def focal_px(cam):
     return cam["width_px"] / (2 * math.tan(math.radians(cam["hfov_deg"]) / 2))
 
 
+def fov_for_pixels(cam, det, distance, person_px):
+    """Horizontal FOV (deg) at which a person `distance` away covers person_px detector pixels."""
+    f = person_px * distance / (det["person_size_m"] * detector_scale(cam, det))
+    return math.degrees(2 * math.atan(cam["width_px"] / (2 * f)))
+
+
 def vertical_fov(cam):
     return 2 * math.atan(math.tan(math.radians(cam["hfov_deg"]) / 2) * cam["height_px"] / cam["width_px"])
 
