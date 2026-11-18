@@ -39,7 +39,6 @@ public:
     void onViewModeChanged(bool nodisplay);
 
     void setCameraTypeEnabled(ImageType type, bool enabled);
-    void logCaptureState(const TCHAR* where, ImageType type); //PIPDEBUG: temporary
     bool getCameraTypeEnabled(ImageType type) const;
     void setupCameraFromSettings(const APIPCamera::CameraSetting& camera_setting, const NedTransform& ned_transform);
     void setCameraOrientation(const FRotator& rotator);

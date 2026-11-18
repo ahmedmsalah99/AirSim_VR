@@ -428,25 +428,8 @@ void APIPCamera::setNoiseMaterial(int image_type, UObject* outer, FPostProcessSe
     obj.AddBlendable(noise_material_, 1.0f);
 }
 
-//PIPDEBUG: temporary logging to find why subwindows stay black
-void APIPCamera::logCaptureState(const TCHAR* where, ImageType type)
-{
-    unsigned int i = Utils::toNumeric(type);
-    USceneCaptureComponent2D* capture = captures_[i];
-    if (capture == nullptr) {
-        UE_LOG(LogTemp, Warning, TEXT("PIPDEBUG %s frame=%llu camera=%s type=%u capture=null"), where, (unsigned long long)GFrameCounter, *GetName(), i);
-        return;
-    }
-    UE_LOG(LogTemp, Warning, TEXT("PIPDEBUG %s frame=%llu pawn=%s camera=%s type=%u enabled=%d registered=%d active=%d visible=%d ticking=%d everyFrame=%d onMove=%d target=%p rt=%p"),
-        where, (unsigned long long)GFrameCounter, GetParentActor() ? *GetParentActor()->GetName() : TEXT("none"), *GetName(), i,
-        camera_type_enabled_[i] ? 1 : 0, capture->IsRegistered() ? 1 : 0, capture->IsActive() ? 1 : 0, capture->IsVisible() ? 1 : 0,
-        capture->IsComponentTickEnabled() ? 1 : 0, capture->bCaptureEveryFrame ? 1 : 0, capture->bCaptureOnMovement ? 1 : 0,
-        (void*)capture->TextureTarget, (void*)render_targets_[i]);
-}
-
 void APIPCamera::enableCaptureComponent(const APIPCamera::ImageType type, bool is_enabled)
 {
-    logCaptureState(is_enabled ? TEXT("enable-on:before") : TEXT("enable-off:before"), type);
     USceneCaptureComponent2D* capture = getCaptureComponent(type, false);
     if (capture != nullptr) {
         if (is_enabled) {
@@ -468,7 +451,6 @@ void APIPCamera::enableCaptureComponent(const APIPCamera::ImageType type, bool i
         camera_type_enabled_[Utils::toNumeric(type)] = is_enabled;
     }
     //else nothing to enable
-    logCaptureState(is_enabled ? TEXT("enable-on:after") : TEXT("enable-off:after"), type);
 }
 
 UTextureRenderTarget2D* APIPCamera::getRenderTarget(const APIPCamera::ImageType type, bool if_active)

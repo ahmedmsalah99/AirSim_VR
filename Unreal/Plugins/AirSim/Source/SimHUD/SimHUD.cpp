@@ -2,7 +2,6 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/FileHelper.h"
-#include "Engine/GameViewportClient.h" //PIPDEBUG: temporary
 
 #include "Vehicles/Multirotor/SimModeWorldMultiRotor.h"
 #include "Vehicles/Multirotor/SimModeWorldBoth.h"
@@ -45,17 +44,6 @@ void ASimHUD::Tick(float DeltaSeconds)
 {
     if (simmode_ && simmode_->EnableReport)
         widget_->updateDebugReport(simmode_->getDebugReport());
-
-    //PIPDEBUG: temporary; state of visible subwindow cameras every 120 frames
-    if (GFrameCounter % 120 == 0) {
-        UGameViewportClient* viewport = GetWorld()->GetGameViewport();
-        UE_LOG(LogTemp, Warning, TEXT("PIPDEBUG tick frame=%llu viewport DisableWorldRendering=%d"), (unsigned long long)GFrameCounter,
-            viewport ? (viewport->bDisableWorldRendering ? 1 : 0) : -1);
-        for (int window_index = 0; window_index < AirSimSettings::kSubwindowCount; ++window_index) {
-            if (getSubWindowSettings().at(window_index).visible && subwindow_cameras_[window_index] != nullptr)
-                subwindow_cameras_[window_index]->logCaptureState(TEXT("tick"), getSubWindowSettings().at(window_index).image_type);
-        }
-    }
 }
 
 void ASimHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -152,11 +140,6 @@ void ASimHUD::updateWidgetSubwindowVisibility()
             is_visible,
             is_visible ? camera->getRenderTarget(camera_type, false) : nullptr
         );
-        UE_LOG(LogTemp, Warning, TEXT("PIPDEBUG hud frame=%llu window=%d visible=%d camera=%s widget_rt=%p"), //PIPDEBUG: temporary
-            (unsigned long long)GFrameCounter, window_index, is_visible ? 1 : 0, camera ? *camera->GetName() : TEXT("null"),
-            is_visible ? (void*)camera->getRenderTarget(camera_type, false) : nullptr);
-        if (camera != nullptr)
-            camera->logCaptureState(TEXT("hud"), camera_type);
     }
 }
 

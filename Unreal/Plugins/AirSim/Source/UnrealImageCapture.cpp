@@ -87,15 +87,9 @@ void UnrealImageCapture::getSceneCaptureImage(const std::vector<msr::airlib::Ima
             response.camera_orientation = camera_pose.orientation;
         }
     };
-    for (const auto& request : requests) //PIPDEBUG: temporary
-        cameras_->at(request.camera_name)->logCaptureState(TEXT("api:before-render"), request.image_type);
-    UE_LOG(LogTemp, Warning, TEXT("PIPDEBUG api frame=%llu viewport DisableWorldRendering=%d"), (unsigned long long)GFrameCounter, gameViewport->bDisableWorldRendering ? 1 : 0);
-
     RenderRequest render_request { gameViewport, std::move(query_camera_pose_cb) };
 
     render_request.getScreenshot(render_params.data(), render_results, render_params.size(), use_safe_method);
-    for (const auto& request : requests) //PIPDEBUG: temporary
-        cameras_->at(request.camera_name)->logCaptureState(TEXT("api:after-render"), request.image_type);
 
     for (unsigned int i = 0; i < requests.size(); ++i) {
         const ImageRequest& request = requests.at(i);
