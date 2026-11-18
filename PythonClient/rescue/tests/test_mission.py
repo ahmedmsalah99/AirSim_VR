@@ -185,3 +185,26 @@ def test_person_is_confirmed_published_once_and_the_lane_resumes(mission):
     assert los != plan.tilt_deg and tilts[2] == plan.tilt_deg               # line of sight, then restored
     assert m.client.pos == pytest.approx([SPAWN[0] * 0, 0, GROUND_Z])       # landed back at home
     assert any(math.isclose(c[1], 1.0) and c[0] == 0.0 for c in m.client.markers)  # green marker
+
+
+def test_unreachable_confirm_point_does_not_hang_the_mission(mission, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+
+    class Blocked(FakeClient):
+        def moveToPositionAsync(self, x, y, z, v, **kw):
+            if v == cfg["confirm"]["speed"] and len([m for m in self.moves if m[1] == v]) == 0:
+                assert "timeout_sec" in kw  # a waited-on move must be able to give up
+                self.moves.append((np.array([x, y, z]), v))
+                return Future(self)  # the approach never gets anywhere
+            return super().moveToPositionAsync(x, y, z, v, **kw)
+
+    monkeypatch_client = mod.airsim.MultirotorClient
+    mod.airsim.MultirotorClient = Blocked
+    try:
+        m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+        m.run()
+    finally:
+        mod.airsim.MultirotorClient = monkeypatch_client
+    out = capsys.readouterr().out
+    assert "approach stopped" in out and "landed" in out

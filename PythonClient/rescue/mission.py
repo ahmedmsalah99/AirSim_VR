@@ -42,6 +42,7 @@ from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_p
 
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
+MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
 LANE_COLOR = [0.0, 1.0, 0.2, 1.0]
 AREA_COLOR = [1.0, 0.6, 0.0, 1.0]
 CANDIDATE_COLOR = [1.0, 1.0, 0.0, 1.0]
@@ -129,17 +130,20 @@ class Mission:
             c.takeoffAsync(vehicle_name=self.name).join()
             heading = plan.lanes[0].heading_deg
             self.log(f"climbing to {plan.altitude:.1f} m")
-            c.moveToZAsync(self.z, self.cfg["drone"]["climb_speed"], yaw_mode=airsim.YawMode(False, heading),
-                           vehicle_name=self.name).join()
+            climb_s = plan.altitude / self.cfg["drone"]["climb_speed"] * 2 + MOVE_MARGIN_S
+            c.moveToZAsync(self.z, self.cfg["drone"]["climb_speed"], timeout_sec=climb_s,
+                           yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name).join()
 
             for i, lane in enumerate(plan.lanes):
                 self.log(f"to the start of lane {i + 1}/{plan.lane_count}")
-                self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg)
+                self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg,
+                          what=f"transit to lane {i + 1}")
                 self.log(f"lane {i + 1}/{plan.lane_count} at {plan.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")
                 self.sweep(self.at_altitude(lane.end), plan.speed, lane.heading_deg)
 
             self.log("search complete, returning home")
-            self.goto(self.at_altitude(self.spawn[:2]), self.cfg["drone"]["transit_speed"], heading=None)
+            self.goto(self.at_altitude(self.spawn[:2]), self.cfg["drone"]["transit_speed"], heading=None,
+                      what="return home")
             c.landAsync(vehicle_name=self.name).join()
             c.armDisarm(False, self.name)
             self.log("landed")
@@ -155,9 +159,25 @@ class Mission:
         x, y = self.to_local(xy_world)
         return np.array([x, y, self.z])
 
-    def goto(self, target, speed, heading):
+    def goto(self, target, speed, heading, what="move"):
+        """Fly to target and wait, but no longer than twice the expected time plus a margin.
+
+        AirSim's moves never finish if the drone can't reach the point (blocked by a tree or a
+        roof, or after bumping into something), which would hang the mission. Returns whether
+        the drone got there.
+        """
         yaw = airsim.YawMode(False, heading) if heading is not None else airsim.YawMode()
-        self.client.moveToPositionAsync(*target, speed, yaw_mode=yaw, vehicle_name=self.name).join()
+        timeout = 2 * np.linalg.norm(np.asarray(target) - self.position()) / speed + MOVE_MARGIN_S
+        self.client.moveToPositionAsync(*target, speed, timeout_sec=timeout, yaw_mode=yaw,
+                                        vehicle_name=self.name).join()
+        missed = np.linalg.norm(np.asarray(target) - self.position())
+        if missed > ARRIVE_RADIUS:
+            self.log(f"WARNING: {what} stopped {missed:.1f} m short (blocked?); carrying on from here")
+            return False
+        return True
+
+    def face(self, heading):
+        self.client.rotateToYawAsync(heading, timeout_sec=10, vehicle_name=self.name).join()
 
     def sweep(self, target, speed, heading):
         """Fly to target facing heading, checking every frame for people; confirm each new one."""
@@ -165,7 +185,7 @@ class Mission:
             self.goto(target, speed, heading)
             return
         c = self.client
-        c.rotateToYawAsync(heading, vehicle_name=self.name).join()
+        self.face(heading)
         c.moveToPositionAsync(*target, speed, yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name)
         deadline = time.time() + 2 * np.linalg.norm(target - self.position()) / speed + 30
         while np.linalg.norm(self.position()[:2] - target[:2]) > ARRIVE_RADIUS:
@@ -176,7 +196,7 @@ class Mission:
             if candidate is None:
                 continue
             self.confirm(candidate)
-            c.rotateToYawAsync(heading, vehicle_name=self.name).join()
+            self.face(heading)
             c.moveToPositionAsync(*target, speed, yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name)
             deadline = time.time() + 2 * np.linalg.norm(target - self.position()) / speed + 30
 
@@ -215,11 +235,10 @@ class Mission:
         self.log(f"confirming {cand.id}: line of sight {tilt:.0f} deg down, approaching to "
                  f"{np.linalg.norm(point - cand.seen_at):.1f} m from it, {self.ground_z - point[2]:.1f} m up")
 
-        c.rotateToYawAsync(heading, vehicle_name=self.name).join()
+        self.face(heading)
         if not self.camera.set_tilt(tilt):
             self.log("WARNING: couldn't tilt the camera to the line of sight; keeping the search tilt")
-        c.moveToPositionAsync(*point, conf["speed"], yaw_mode=airsim.YawMode(False, heading),
-                              vehicle_name=self.name).join()
+        self.goto(point, conf["speed"], heading, what="approach")
         c.hoverAsync(vehicle_name=self.name).join()
         time.sleep(1)  # settle so frames aren't tilted
 
@@ -258,8 +277,7 @@ class Mission:
             self.mark(cand.seen_at, REJECTED_COLOR, f"x{cand.id}")
 
         self.log("climbing back to the lane")
-        c.moveToPositionAsync(*stop, conf["speed"], yaw_mode=airsim.YawMode(False, heading),
-                              vehicle_name=self.name).join()
+        self.goto(stop, conf["speed"], heading, what="climb back")
         if not self.camera.set_tilt(self.plan.tilt_deg):
             self.log("WARNING: couldn't restore the camera tilt")
 
