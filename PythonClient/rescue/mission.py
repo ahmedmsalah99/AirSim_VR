@@ -12,8 +12,8 @@ in another terminal, then:
 3. A person not seen before interrupts the lane. The drone turns to face them,
    tilts the camera to the line-of-sight angle, and descends along the line of
    sight (the path it just saw them through) towards where they'd be
-   confirm.min_person_px tall, but never below the tallest obstacle plus
-   confirm.clearance. The camera zooms in for the rest.
+   confirm.min_person_px tall, but never below confirm.min_altitude. The camera
+   zooms in for the rest.
 4. It hovers and checks N frames. If the person is found near the same spot in
    k of them, their position is published over ZeroMQ and marked green in the
    scene; otherwise the candidate is rejected (red).
@@ -47,9 +47,9 @@ ARRIVE_RADIUS = 1.5
 MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
 LANE_COLOR = [0.0, 1.0, 0.2, 1.0]
 AREA_COLOR = [1.0, 0.6, 0.0, 1.0]
-CANDIDATE_COLOR = [1.0, 1.0, 0.0, 1.0]
 CONFIRMED_COLOR = [0.0, 1.0, 0.0, 1.0]
 REJECTED_COLOR = [1.0, 0.0, 0.0, 1.0]
+MARKER_HEIGHT_M = 6
 
 
 @dataclass
@@ -213,7 +213,6 @@ class Mission:
             self.candidates.append(cand)
             w = self.to_world(feet)
             self.log(f"candidate {cand.id} at x={w[0]:.1f} y={w[1]:.1f} (confidence {det.confidence:.2f})")
-            self.mark(feet, CANDIDATE_COLOR, f"?{cand.id}")
             return cand
         return None
 
@@ -233,11 +232,11 @@ class Mission:
         c.hoverAsync(vehicle_name=self.name).join()
 
         # Descend along the line of sight towards the distance where the person is min_person_px,
-        # but never below the tallest obstacle plus clearance: there's no obstacle map, and trees
-        # and roofs stand around people. Zooming the camera makes up the rest.
+        # but never below min_altitude: there's no obstacle map, and trees and roofs stand around
+        # people. Zooming the camera makes up the rest.
         cam, det = self.cfg["camera"], self.cfg["detector"]
         distance = det["person_size_m"] * focal_px(cam) * detector_scale(cam, det) / conf["min_person_px"]
-        lowest_z = self.ground_z - (self.cfg["area"]["max_obstacle_height"] + conf["clearance"])
+        lowest_z = self.ground_z - conf["min_altitude"]
         point, heading, tilt = confirm_viewpoint(stop, cand.seen_at, distance, lowest_z)
         range_m = float(np.linalg.norm(point - cand.seen_at))
         fov = min(cam["hfov_deg"], max(conf["min_fov_deg"], fov_for_pixels(cam, det, range_m, conf["min_person_px"])))
@@ -322,14 +321,19 @@ class Mission:
         (ax, ay), (bx, by) = self.cfg["area"]["corner_a"], self.cfg["area"]["corner_b"]
         area = [airsim.Vector3r(x, y, ground - 0.5) for x, y in [(ax, ay), (ax, by), (bx, by), (bx, ay), (ax, ay)]]
         self.client.simFlushPersistentMarkers()
-        self.client.simPlotLineStrip(area, color_rgba=AREA_COLOR, thickness=15, is_persistent=True)
+        self.client.simPlotLineStrip(area, color_rgba=AREA_COLOR, thickness=5, is_persistent=True)
         self.client.simPlotLineStrip(lanes, color_rgba=LANE_COLOR, thickness=8, is_persistent=True)
 
     def mark(self, p, color, label):
+        """Mark a decided candidate, MARKER_HEIGHT_M above the ground.
+
+        The camera sees debug drawings too: a marker on a person hides them, so candidates
+        aren't marked until they're decided, and markers float above the spot.
+        """
         w = self.to_world(p)
-        z = self.ground_z + self.spawn[2] - 1
-        self.client.simPlotPoints([airsim.Vector3r(w[0], w[1], z)], color_rgba=color, size=25, is_persistent=True)
-        self.client.simPlotStrings([label], [airsim.Vector3r(w[0], w[1], z - 2)], scale=3,
+        z = self.ground_z + self.spawn[2] - MARKER_HEIGHT_M
+        self.client.simPlotPoints([airsim.Vector3r(w[0], w[1], z)], color_rgba=color, size=15, is_persistent=True)
+        self.client.simPlotStrings([label], [airsim.Vector3r(w[0], w[1], z - 1)], scale=3,
                                    color_rgba=color, duration=3600)
 
     def report(self):

@@ -51,7 +51,8 @@ search:
 
 confirm:
   min_person_px: 40             # approach and zoom until a person is this big
-  clearance: 3                  # never descend below max_obstacle_height + this while confirming
+  min_altitude: 12              # never descend below this while confirming; trees here reach
+                                #   ~15 m, so lower risks collisions near them
   min_fov_deg: 10               # the camera can zoom in to this horizontal field of view
   speed: 2                      # along the line of sight, down and back up
   use_depth: false              # measure a confirmed person with the depth camera (slow in AirSim)

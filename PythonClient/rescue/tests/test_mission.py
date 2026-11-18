@@ -1,5 +1,4 @@
 """Run mission.py against a fake AirSim, camera, detector and publisher."""
-import math
 import sys
 import types
 from pathlib import Path
@@ -187,15 +186,14 @@ def test_person_is_confirmed_published_once_and_the_lane_resumes(mission):
     approach, back = confirm_moves
     assert np.linalg.norm(approach - PERSON) < np.linalg.norm(back - PERSON)  # went closer, then returned
     assert back[2] == pytest.approx(GROUND_Z - plan.altitude)                # back at survey altitude
-    lowest = cfg["area"]["max_obstacle_height"] + cfg["confirm"]["clearance"]
-    assert GROUND_Z - approach[2] == pytest.approx(lowest)                   # never below the obstacles
+    assert GROUND_Z - approach[2] >= cfg["confirm"]["min_altitude"] - 1e-9   # never below min_altitude
 
     tilts = m.camera.tilts
     assert tilts[0] == plan.tilt_deg and tilts[-1] == 89.5
     los = tilts[1]
     assert los != plan.tilt_deg and tilts[2] == plan.tilt_deg               # line of sight, then restored
     assert m.client.pos == pytest.approx([SPAWN[0] * 0, 0, GROUND_Z])       # landed back at home
-    assert any(math.isclose(c[1], 1.0) and c[0] == 0.0 for c in m.client.markers)  # green marker
+    assert m.client.markers == [mod.CONFIRMED_COLOR]  # nothing drawn on the person before it's decided
 
 
 def test_unreachable_confirm_point_does_not_hang_the_mission(mission, capsys):
