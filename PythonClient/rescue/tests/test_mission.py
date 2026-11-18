@@ -68,12 +68,14 @@ class FakeClient:
 class FakeCamera:
     def __init__(self, client, airsim, cfg):
         self.tilts = []
+        self.depth_grabs = 0
 
     def set_tilt(self, tilt):
         self.tilts.append(tilt)
         return True
 
     def grab(self, with_depth=False):
+        self.depth_grabs += with_depth
         return types.SimpleNamespace(image=None)
 
     def ground_point(self, frame, u, v, ground_z):
@@ -172,7 +174,8 @@ def test_person_is_confirmed_published_once_and_the_lane_resumes(mission):
     assert len(PUBLISHED) == 1, "seen in every frame, but published only once"
     vid, world, hits, frames = PUBLISHED[0]
     assert hits == frames == cfg["confirm"]["frames"]
-    assert world[:2] == pytest.approx(PERSON[:2] + SPAWN[:2] + [0.2, -0.1])
+    assert world[:2] == pytest.approx(PERSON[:2] + SPAWN[:2] + [0.2, -0.1])  # from the depth camera
+    assert m.camera.depth_grabs == 1  # float depth is slow: once, for the final position
 
     confirm_moves = [p for p, v in m.client.moves if v == cfg["confirm"]["speed"]]
     approach, back = confirm_moves

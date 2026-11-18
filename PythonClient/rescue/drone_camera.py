@@ -101,10 +101,16 @@ class DroneCamera:
         return ground_point(self.intr, frame.pos, frame.q, u, v, ground_z)
 
     def depth_point(self, frame, u, v):
-        """3D point at pixel (u, v) from the frame's depth image, or None where there's no surface."""
+        """3D point at image pixel (u, v) from the frame's depth image, or None where there's no surface.
+
+        The depth image may be smaller than the scene image (settings.json keeps it at 320x180:
+        AirSim's Python client decodes float images very slowly), with the same field of view,
+        so (u, v) is scaled to it.
+        """
         h, w = frame.depth.shape
-        x, y = int(np.clip(u, 0, w - 1)), int(np.clip(v, 0, h - 1))
-        window = frame.depth[max(y - 2, 0):y + 3, max(x - 2, 0):x + 3]
+        x = int(np.clip(u * w / self.intr.width, 0, w - 1))
+        y = int(np.clip(v * h / self.intr.height, 0, h - 1))
+        window = frame.depth[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2]
         d = float(np.median(window))
         if not 0 < d < MAX_DEPTH_M:
             return None
