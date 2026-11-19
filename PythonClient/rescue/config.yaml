@@ -31,6 +31,8 @@ camera:
 detector:
   model: models/person_yolo11s.onnx  # relative to this folder
   person_class: 0
+  device: auto                  # auto = the fastest of the GPUs and the CPU (timed at start-up);
+                                #   or cpu, cuda, dml:0, dml:1 ... (DirectML GPU number)
   conf_threshold: 0.25
   iou_threshold: 0.45           # boxes overlapping more than this are merged (NMS)
   input_size: 640               # YOLO11 input

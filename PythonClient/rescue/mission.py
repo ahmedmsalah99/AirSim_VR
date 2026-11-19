@@ -94,6 +94,8 @@ class Mission:
         self.speed = plan.speed
         self.scans = {"frames": 0, "people": 0}
         self.image_dir = OUTPUT_DIR / f"mission_{time.strftime('%Y%m%d_%H%M%S')}"
+        if getattr(self.detector, "device", None):
+            self.log(f"detector on {self.detector.device}: {self.detector.seconds_per_tile:.2f} s per tile")
 
     # ---- bookkeeping -------------------------------------------------------------------
 
