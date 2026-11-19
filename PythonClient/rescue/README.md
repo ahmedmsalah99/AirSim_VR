@@ -57,7 +57,7 @@ Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). 
 The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90 = straight down). On flat ground it sees a trapezoid. A person covers `person_size × f × sin(a) / h` detector pixels, where `a` is the ray's angle below the horizon, `h` the altitude and `f` the focal length in detector pixels (each image tile is resized to the 640 px input, so `f` shrinks with it). So people are only detectable out to the slant range where they shrink to `min_person_px`.
 
 1. **Detection band:** from the bottom edge of the image (`near`) to wherever comes first, the top edge of the image or that range (`far`). `near` and `far` are distances ahead of the drone.
-2. **Swath:** the ground width covered at the far edge, `2 × depth × tan(hfov / 2)`. Every point within half a swath of the lane crosses the band.
+2. **Swath:** the ground width covered at the **near** edge of the band, `2 × depth × tan(hfov / 2)`, its narrowest. The band is wider at its far edge, but a point out at the far edge's sides is only seen at the far end, where people are smallest and in the fewest frames; spaced by the near-edge width, every point between the lanes crosses the whole band.
 3. **Lane spacing** = swath × (1 − `side_overlap`), spread evenly so the outer lanes just reach the edges. Lanes run along `search.lane_axis` (`x` or `y`; `auto` picks whichever gives the shorter mission, usually the long side) and alternate direction; the drone faces its direction of travel. Each lane is shifted back by `near`, so the band starts on the area's edge and ends just past the far edge.
 4. **Speed** is the slowest of:
    - `max_speed` of the drone,
