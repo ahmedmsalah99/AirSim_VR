@@ -92,12 +92,14 @@ public:
 
     bool waitFor(double timeout_sec)
     {
-        // wait for signal or timeout or cancel predicate
-        while (!signaled_) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait_for(lock, std::chrono::milliseconds(
-                static_cast<long long>(timeout_sec * 1000)));
-        }
+        // Wait for the signal, or return false after timeout_sec. The flag is checked under the
+        // lock, inside wait_for: checked before taking the lock (as this used to), a signal()
+        // landing between the check and the wait was lost, and every wait ran the full timeout.
+        // simGetImages hit that whenever the render thread finished quickly: 5 s per image.
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (!cv_.wait_for(lock, std::chrono::milliseconds(static_cast<long long>(timeout_sec * 1000)),
+                          [this] { return signaled_.load(); }))
+            return false;
         signaled_ = false;
         return true;
     }

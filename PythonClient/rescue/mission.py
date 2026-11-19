@@ -158,8 +158,15 @@ class Mission:
 
             for i, lane in enumerate(plan.lanes):
                 self.log(f"to the start of lane {i + 1}/{plan.lane_count}")
-                self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg,
-                          what=f"transit to lane {i + 1}")
+                if i == 0:
+                    self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg,
+                              what=f"transit to lane {i + 1}")
+                else:
+                    # A short hop to the next lane: at the search speed, holding the current heading.
+                    # At transit speed while turning 180 deg it overshot the lane start; sweep()
+                    # turns to the new lane's heading in place once there.
+                    self.goto(self.at_altitude(lane.start), self.speed, heading=None,
+                              what=f"transit to lane {i + 1}")
                 if i == 0:
                     self.speed = self.speed_for_frame_rate()
                 self.log(f"lane {i + 1}/{plan.lane_count} at {self.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")
@@ -266,10 +273,16 @@ class Mission:
     def frame_rate(self, frames=3):
         """Search frames per second actually achieved: capture plus detection, timed."""
         self.camera.grab()  # the first frame includes one-off setup
-        start = time.time()
+        capture = detection = 0.0
         for _ in range(frames):
-            self.detector.detect(self.camera.grab().image)
-        return frames / max(time.time() - start, 1e-6)
+            start = time.time()
+            image = self.camera.grab().image
+            capture += time.time() - start
+            start = time.time()
+            self.detector.detect(image)
+            detection += time.time() - start
+        self.log(f"per frame: capture {capture / frames:.2f} s (AirSim), detection {detection / frames:.2f} s (YOLO)")
+        return frames / max(capture + detection, 1e-6)
 
     def speed_for_frame_rate(self):
         """The planned speed, or slower if frames come too slowly for it.
