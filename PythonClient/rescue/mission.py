@@ -52,6 +52,8 @@ FAST_DESCENT_SPEED = 3    # m/s above that
 MIN_SEARCH_SPEED = 0.3  # m/s; slower than this the search would never finish
 REPORT_EVERY_S = 5  # how often the search logs what it has been detecting
 STILL_SPEED = 0.3   # m/s
+LOOKAHEAD_PER_SPEED = 0.6  # AirSim's auto lookahead: 4.8 m at 8 m/s, 0.9 m at 1.5 m/s
+MIN_MOVE_SPEED = 1.0
 MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
 LANE_COLOR = [0.0, 1.0, 0.2, 1.0]
 AREA_COLOR = [1.0, 0.6, 0.0, 1.0]
@@ -219,6 +221,7 @@ class Mission:
         self.log(f"to the search view of {tag}: {ahead:.0f} m back from it, {self.plan.altitude:.0f} m up, "
                  f"facing it (heading {heading:.0f} deg)")
         self.goto(view, self.cfg["drone"]["transit_speed"], heading, what=f"move to view {tag}")
+        self.face(heading)  # the move's yaw can be unfinished when it ends
         self.wait_until_still()
         for i in range(max_frames):
             candidate = self.scan()
@@ -352,7 +355,12 @@ class Mission:
         the drone got there.
         """
         yaw = airsim.YawMode(False, heading) if heading is not None else airsim.YawMode()
-        timeout = 2 * np.linalg.norm(np.asarray(target) - self.position()) / speed + MOVE_MARGIN_S
+        distance = np.linalg.norm(np.asarray(target) - self.position())
+        # AirSim's path follower aims LOOKAHEAD_PER_SPEED * speed ahead and returns at once if the
+        # target is closer than that: a 3.6 m move at 8 m/s ended where it started. Short moves
+        # go slower, so the lookahead stays inside them.
+        speed = min(speed, max(MIN_MOVE_SPEED, distance / (2 * LOOKAHEAD_PER_SPEED)))
+        timeout = 2 * distance / speed + MOVE_MARGIN_S
         self.client.moveToPositionAsync(*target, speed, timeout_sec=timeout, yaw_mode=yaw,
                                         vehicle_name=self.name).join()
         missed = np.linalg.norm(np.asarray(target) - self.position())
