@@ -454,3 +454,14 @@ def test_rejected_candidate_is_not_retried_from_the_same_place_or_too_often(miss
     assert m.can_retry(cand)
     cand.attempts = cfg["confirm"]["max_attempts"]
     assert not m.can_retry(cand)
+
+
+def test_weak_detections_dont_start_a_confirmation(mission, monkeypatch, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    monkeypatch.setattr(FakeDetector, "detect",
+                        lambda self, image: [types.SimpleNamespace(center=(640, 400), y2=420, confidence=0.3)])
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.run()
+    assert not m.candidates and not PUBLISHED
+    assert "below 0.4 confidence" in capsys.readouterr().out

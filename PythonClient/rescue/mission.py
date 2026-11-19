@@ -349,7 +349,12 @@ class Mission:
         detections = self.detector.detect(frame.image)
         self.scans["frames"] += 1
         self.scans["people"] += len(detections)
+        min_conf = self.cfg["search"]["min_candidate_confidence"]
         for det in detections:
+            if det.confidence < min_conf:
+                reason = f"below {min_conf} confidence"
+                self.scans[reason] = self.scans.get(reason, 0) + 1
+                continue
             feet = self.camera.ground_point(frame, det.center[0], det.y2, self.ground_z)
             if feet is None or not self.in_area(feet):
                 reason = "not on the ground" if feet is None else "outside the area"
