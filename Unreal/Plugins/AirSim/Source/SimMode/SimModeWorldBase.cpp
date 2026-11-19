@@ -12,7 +12,8 @@ void ASimModeWorldBase::initializeForPlay()
 {
     std::vector<msr::airlib::UpdatableObject*> vehicles;
     for (auto& api : getApiProvider()->getVehicleSimApis())
-        vehicles.push_back(api);
+        if (isUpdatedByPhysicsWorld(api))
+            vehicles.push_back(api);
     //TODO: directly accept getVehicleSimApis() using generic container
 
     std::unique_ptr<PhysicsEngineBase> physics_engine = createPhysicsEngine();
@@ -113,14 +114,16 @@ void ASimModeWorldBase::Tick(float DeltaSeconds)
         physics_world_->updateStateReport();
 
         for (auto& api : getApiProvider()->getVehicleSimApis())
-            api->updateRenderedState(DeltaSeconds);
+            if (isUpdatedByPhysicsWorld(api))
+                api->updateRenderedState(DeltaSeconds);
 
         physics_world_->unlock();
     }
 
     //perform any expensive rendering update outside of lock region
     for (auto& api : getApiProvider()->getVehicleSimApis())
-        api->updateRendering(DeltaSeconds);
+        if (isUpdatedByPhysicsWorld(api))
+            api->updateRendering(DeltaSeconds);
 
     Super::Tick(DeltaSeconds);
 }
