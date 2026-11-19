@@ -19,8 +19,10 @@ The drone searches a rectangle in a lawnmower pattern with its camera tilted for
 ## Setup
 
 ```
-pip install msgpack-rpc-python numpy pyyaml onnxruntime opencv-python pyzmq
+pip install msgpack-rpc-python numpy pyyaml onnxruntime-directml opencv-python pyzmq
 ```
+
+`onnxruntime-directml` runs the detector on the GPU (any DirectX 12 GPU on Windows, no CUDA needed). On the CPU, next to Unreal, YOLO took 3.6 s per frame. It replaces plain `onnxruntime`; if that's installed, `pip uninstall onnxruntime` first, since the two clash. At start-up the detector times every GPU it finds and the CPU and uses the fastest (`detector on DirectML GPU 1: 0.02 s per tile`); `detector.device` in `config.yaml` can pin one instead.
 
 Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). Its `CameraDefaults` give every camera, including the drone's `bottom_center`, 1280×720 images with a 60° field of view, which the plan assumes. Don't configure cameras under `Vehicles` → `Cameras`: in this AirSim version that spawns a new camera actor and crashes on Play. The settings also spawn the drone 4 m east of the Husky so it doesn't land on it.
 

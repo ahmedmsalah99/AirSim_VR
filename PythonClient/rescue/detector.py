@@ -7,6 +7,7 @@ image pixels; boxes from all tiles are then merged with NMS.
 """
 from dataclasses import dataclass
 import math
+import time
 from pathlib import Path
 
 import cv2
@@ -70,9 +71,10 @@ class PersonDetector:
             model = base_dir / model
         if not model.exists():
             raise FileNotFoundError(f"detector model not found: {model}")
-        self.session = ort.InferenceSession(str(model), providers=ort.get_available_providers())
-        self.input_name = self.session.get_inputs()[0].name
         self.size = det_cfg["input_size"]
+        self.session, self.device, self.seconds_per_tile = pick_session(ort, model, self.size,
+                                                                        det_cfg.get("device", "auto"))
+        self.input_name = self.session.get_inputs()[0].name
 
     def detect(self, image_bgr, classes=None):
         """Detections in full-image pixels. classes: class ids to keep (default: person only)."""
@@ -104,6 +106,63 @@ class PersonDetector:
             idx = cv2.dnn.NMSBoxes(boxes, scores, self.cfg["conf_threshold"], self.cfg["iou_threshold"])
             kept += merge_fragments([group[i] for i in np.array(idx).flatten()])
         return sorted(kept, key=lambda d: -d.confidence)
+
+
+def _session_options(ort, provider):
+    options = ort.SessionOptions()
+    if provider == "DmlExecutionProvider":  # DirectML needs these
+        options.enable_mem_pattern = False
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    return options
+
+
+def _candidates(ort, device):
+    """(name, providers) to try for device: "auto", "cpu", "cuda" or "dml:<n>" (a DirectML GPU)."""
+    available = ort.get_available_providers()
+    cpu = [("CPU", ["CPUExecutionProvider"])]
+    if device == "cpu":
+        return cpu
+    if device == "cuda":
+        return [("CUDA", ["CUDAExecutionProvider", "CPUExecutionProvider"])]
+    if device.startswith("dml:"):
+        n = int(device[4:])
+        return [(f"DirectML GPU {n}", [("DmlExecutionProvider", {"device_id": n}), "CPUExecutionProvider"])]
+    if device != "auto":
+        raise ValueError(f"detector.device must be auto, cpu, cuda or dml:<n>, not {device!r}")
+    found = []
+    if "CUDAExecutionProvider" in available:
+        found.append(("CUDA", ["CUDAExecutionProvider", "CPUExecutionProvider"]))
+    if "DmlExecutionProvider" in available:
+        # Every GPU DirectML sees: on a laptop GPU 0 is usually the integrated one.
+        found += [(f"DirectML GPU {n}", [("DmlExecutionProvider", {"device_id": n}), "CPUExecutionProvider"])
+                  for n in range(4)]
+    return found + cpu
+
+
+def pick_session(ort, model, size, device="auto"):
+    """The fastest working ONNX Runtime session for device (see _candidates): each candidate
+    runs the model on a blank tile and the quickest wins. Returns (session, name, s per tile)."""
+    blank = np.zeros((1, 3, size, size), np.float32)
+    best = None
+    for name, providers in _candidates(ort, device):
+        first = providers[0] if isinstance(providers[0], str) else providers[0][0]
+        try:
+            session = ort.InferenceSession(str(model), _session_options(ort, first), providers=providers)
+            if session.get_providers()[0] != first:
+                continue  # fell back to the CPU
+            feed = {session.get_inputs()[0].name: blank}
+            session.run(None, feed)  # the first run includes one-off setup
+            start = time.time()
+            for _ in range(3):
+                session.run(None, feed)
+            seconds = (time.time() - start) / 3
+        except Exception:  # noqa: BLE001 - a GPU that doesn't exist or can't run the model
+            continue
+        if best is None or seconds < best[2]:
+            best = (session, name, seconds)
+    if best is None:
+        raise RuntimeError(f"no ONNX Runtime device could run {model} (detector.device: {device})")
+    return best
 
 
 def merge_fragments(detections, min_overlap=0.6):

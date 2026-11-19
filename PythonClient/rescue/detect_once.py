@@ -43,6 +43,7 @@ def main():
 
     cfg = load_config(DEFAULT_CONFIG)
     detector = PersonDetector(cfg["detector"])
+    print(f"detector on {detector.device}: {detector.seconds_per_tile:.2f} s per tile")
     classes = None if not args.all_classes else [0, 1]
 
     if args.image:
