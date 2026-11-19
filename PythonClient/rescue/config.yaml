@@ -7,8 +7,8 @@
 # Heights are metres above the ground at the drone's takeoff point.
 
 area:
-  corner_a: [-25, -60]          # any two opposite corners of the search rectangle
-  corner_b: [25, 60]
+  corner_a: [-20, -60]          # any two opposite corners of the search rectangle
+  corner_b: [20, 60]
   max_obstacle_height: 15       # tallest building or tree inside the rectangle
 
 drone:
@@ -18,6 +18,7 @@ drone:
   max_speed: 8                  # search speed cap; the measured frame rate can lower it
   climb_speed: 3
   transit_speed: 8
+  turn_speed: 3                 # the hop from one lane's end to the next lane's start
   turn_time_s: 3                # stopping, turning and accelerating at each lane end
 
 camera:
@@ -31,8 +32,9 @@ camera:
 detector:
   model: models/person_yolo11s.onnx  # relative to this folder
   person_class: 0
-  device: auto                  # auto = the fastest of the GPUs and the CPU (timed at start-up);
-                                #   or cpu, cuda, dml:0, dml:1 ... (DirectML GPU number)
+  device: auto                  # auto = CUDA, else DirectML GPU 1, else GPU 0, else the CPU;
+                                #   or cpu, cuda, dml:0, dml:1 ... (DirectML GPU number). On a laptop
+                                #   GPU 0 is the integrated one that draws the screen: don't use it
   conf_threshold: 0.25
   iou_threshold: 0.45           # boxes overlapping more than this are merged (NMS)
   input_size: 640               # YOLO11 input
@@ -61,7 +63,7 @@ confirm:
   speed: 1.5                    # along the line of sight, down and back up
   use_depth: false              # measure a confirmed person with the depth camera (slow in AirSim)
   frames: 12                    # N frames are checked from each viewpoint ...
-  required: 8                   #   ... and the person must be found in k of them from one viewpoint
+  required: 5                   #   ... and the person must be found in k of them from one viewpoint
   arc_offsets_deg: [0, 30, -30] # viewpoints around the person: the approach, then along an arc to
                                 #   either side (same distance and height), until one sees them
   arc_step_deg: 10              # the arc is flown in steps this size, facing the person

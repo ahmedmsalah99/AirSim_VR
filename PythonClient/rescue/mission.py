@@ -164,11 +164,12 @@ class Mission:
                     self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg,
                               what=f"transit to lane {i + 1}")
                 else:
-                    # A short hop to the next lane: at the search speed, holding the current heading.
-                    # At transit speed while turning 180 deg it overshot the lane start; sweep()
-                    # turns to the new lane's heading in place once there.
-                    self.goto(self.at_altitude(lane.start), self.speed, heading=None,
-                              what=f"transit to lane {i + 1}")
+                    # A short hop to the next lane: stop at the end of the last one first (a new
+                    # move given at search speed carried the drone on past the corner), then hop at
+                    # turn_speed holding the heading; sweep() turns to the new lane in place.
+                    self.wait_until_still()
+                    self.goto(self.at_altitude(lane.start), min(self.speed, self.cfg["drone"]["turn_speed"]),
+                              heading=None, what=f"transit to lane {i + 1}")
                 if i == 0:
                     self.speed = self.speed_for_frame_rate()
                 self.log(f"lane {i + 1}/{plan.lane_count} at {self.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")

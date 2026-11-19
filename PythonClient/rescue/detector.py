@@ -133,17 +133,18 @@ def _candidates(ort, device):
     if "CUDAExecutionProvider" in available:
         found.append(("CUDA", ["CUDAExecutionProvider", "CPUExecutionProvider"]))
     if "DmlExecutionProvider" in available:
-        # Every GPU DirectML sees: on a laptop GPU 0 is usually the integrated one.
+        # GPU 1 before GPU 0: on a laptop 0 is the integrated GPU that draws the screen, and
+        # running the detector on it froze the machine (a timing race picked it while Unreal
+        # kept the discrete GPU busy). A machine with one GPU only has 0.
         found += [(f"DirectML GPU {n}", [("DmlExecutionProvider", {"device_id": n}), "CPUExecutionProvider"])
-                  for n in range(4)]
+                  for n in (1, 0)]
     return found + cpu
 
 
 def pick_session(ort, model, size, device="auto"):
-    """The fastest working ONNX Runtime session for device (see _candidates): each candidate
-    runs the model on a blank tile and the quickest wins. Returns (session, name, s per tile)."""
+    """The first ONNX Runtime session for device (see _candidates) that works, with its time
+    per tile on a blank tile. Returns (session, name, s per tile)."""
     blank = np.zeros((1, 3, size, size), np.float32)
-    best = None
     for name, providers in _candidates(ort, device):
         first = providers[0] if isinstance(providers[0], str) else providers[0][0]
         try:
@@ -158,11 +159,8 @@ def pick_session(ort, model, size, device="auto"):
             seconds = (time.time() - start) / 3
         except Exception:  # noqa: BLE001 - a GPU that doesn't exist or can't run the model
             continue
-        if best is None or seconds < best[2]:
-            best = (session, name, seconds)
-    if best is None:
-        raise RuntimeError(f"no ONNX Runtime device could run {model} (detector.device: {device})")
-    return best
+        return session, name, seconds
+    raise RuntimeError(f"no ONNX Runtime device could run {model} (detector.device: {device})")
 
 
 def merge_fragments(detections, min_overlap=0.6):
