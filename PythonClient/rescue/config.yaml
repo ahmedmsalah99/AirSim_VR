@@ -56,8 +56,13 @@ confirm:
   min_fov_deg: 10               # the camera can zoom in to this horizontal field of view
   speed: 1.5                    # along the line of sight, down and back up
   use_depth: false              # measure a confirmed person with the depth camera (slow in AirSim)
-  frames: 8                     # N frames are checked at the confirm point ...
-  required: 5                   #   ... and the person must be found in k of them
+  frames: 6                     # N frames are checked from each viewpoint ...
+  required: 4                   #   ... and the person must be found in k of them from one viewpoint
+  arc_offsets_deg: [0, 30, -30] # viewpoints around the person: the approach, then along an arc to
+                                #   either side (same distance and height), until one sees them
+  arc_step_deg: 10              # the arc is flown in steps this size, facing the person
+  max_attempts: 2               # a rejected candidate is tried again if detected again ...
+  retry_distance: 10            #   ... from at least this far from where it was last tried
   frame_interval_s: 0.6
   save_images: true             # save each candidate's search frame and confirm frames to output/
   match_radius: 3.0             # a detection this close to the candidate counts as a hit

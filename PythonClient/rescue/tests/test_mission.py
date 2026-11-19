@@ -116,11 +116,23 @@ class FakePublisher:
 SPAWN = None
 
 
+def one_drone(cls):
+    """A MultirotorClient stand-in: every connection talks to the same fake drone, as
+    reconnecting to AirSim does."""
+    drone = {}
+
+    def connect(port):
+        if "it" not in drone:
+            drone["it"] = cls(port)
+        return drone["it"]
+    return connect
+
+
 @pytest.fixture
 def mission(monkeypatch, tmp_path):
     global SPAWN
     fake = types.ModuleType("airsim")
-    fake.MultirotorClient = FakeClient
+    fake.MultirotorClient = one_drone(FakeClient)
     fake.YawMode = lambda *a: a
     fake.Vector3r = lambda *a: a
     fake.LandedState = types.SimpleNamespace(Landed=0, Flying=1)
@@ -216,13 +228,12 @@ def test_unreachable_confirm_point_does_not_hang_the_mission(mission, capsys):
                 return Future(self)  # the approach never gets anywhere
             return super().moveToPositionAsync(x, y, z, v, **kw)
 
-    monkeypatch_client = mod.airsim.MultirotorClient
-    mod.airsim.MultirotorClient = Blocked
+    mod.airsim.MultirotorClient = one_drone(Blocked)
     try:
         m = mod.Mission(cfg, plan_survey(cfg), detect=True)
         m.run()
     finally:
-        mod.airsim.MultirotorClient = monkeypatch_client
+        mod.airsim.MultirotorClient = one_drone(FakeClient)
     out = capsys.readouterr().out
     assert "approach stopped" in out and "landed" in out
 
@@ -271,12 +282,12 @@ def run_interrupted(mod, cfg, client=FakeClient):
     from survey_plan import plan_survey
     Interrupt.fired = False
     mod.DroneCamera = Interrupt
-    mod.airsim.MultirotorClient = client
+    mod.airsim.MultirotorClient = one_drone(client)
     try:
         m = mod.Mission(cfg, plan_survey(cfg), detect=True)
         m.run()
     finally:
-        mod.airsim.MultirotorClient = FakeClient
+        mod.airsim.MultirotorClient = one_drone(FakeClient)
     return m
 
 
@@ -313,12 +324,12 @@ class StuckLanding(FakeClient):
 def test_landing_is_checked_and_finished(mission, capsys):
     mod, cfg = mission
     from survey_plan import plan_survey
-    mod.airsim.MultirotorClient = StuckLanding
+    mod.airsim.MultirotorClient = one_drone(StuckLanding)
     try:
         m = mod.Mission(cfg, plan_survey(cfg), detect=False)
         m.run()
     finally:
-        mod.airsim.MultirotorClient = FakeClient
+        mod.airsim.MultirotorClient = one_drone(FakeClient)
     out = capsys.readouterr().out
     assert "descending the rest" in out
     assert m.client.pos[2] == pytest.approx(GROUND_Z)
@@ -341,13 +352,13 @@ class HeldInTheAir(FakeClient):
 def test_ground_is_measured_not_assumed(mission, capsys):
     mod, cfg = mission
     from survey_plan import plan_survey
-    mod.airsim.MultirotorClient = HeldInTheAir
+    mod.airsim.MultirotorClient = one_drone(HeldInTheAir)
     try:
         plan = plan_survey(cfg)
         m = mod.Mission(cfg, plan, detect=False)
         m.run()
     finally:
-        mod.airsim.MultirotorClient = FakeClient
+        mod.airsim.MultirotorClient = one_drone(FakeClient)
     out = capsys.readouterr().out
     assert "ground is 5.0 m below the drone" in out
     assert m.ground_z == pytest.approx(GROUND_Z)
@@ -391,3 +402,55 @@ def test_fast_frames_keep_the_planned_speed(mission):
     m = mod.Mission(cfg, plan, detect=True)
     m.run()
     assert m.speed == plan.speed
+
+
+def test_blocked_first_view_is_confirmed_from_the_arc(mission, monkeypatch, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    plan = plan_survey(cfg)
+    real_look = mod.Mission.look
+    monkeypatch.setattr(mod.Mission, "look",
+                        lambda self, cand, view: ([], []) if view == "+0" else real_look(self, cand, view))
+    m = mod.Mission(cfg, plan, detect=True)
+    m.run()
+
+    assert len(PUBLISHED) == 1
+    out = capsys.readouterr().out
+    assert "moving +30 deg around it" in out and "from the +30 deg view" in out
+    slow = [p for p, v in m.client.moves if v == cfg["confirm"]["speed"]]
+    approach, arc, back = slow[0], slow[1:-1], slow[-1]
+    radius = np.hypot(*(approach - PERSON)[:2])
+    assert len(arc) >= 6                                       # out to +30 and back, in 10 deg steps
+    for p in arc:
+        assert np.hypot(*(p - PERSON)[:2]) == pytest.approx(radius)  # same distance from the person
+        assert p[2] == pytest.approx(approach[2])                    # same height
+    assert arc[-1] == pytest.approx(approach)                  # back to the approach point ...
+    assert back[2] == pytest.approx(GROUND_Z - plan.altitude)  # ... then up to the lane
+
+
+def test_rejected_candidate_is_retried_from_a_new_viewpoint(mission, monkeypatch, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    real_look = mod.Mission.look
+    monkeypatch.setattr(mod.Mission, "look",
+                        lambda self, cand, view: ([], []) if cand.attempts == 1 else real_look(self, cand, view))
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.run()
+
+    out = capsys.readouterr().out
+    assert "rejected candidate 1" in out and "trying again" in out
+    (cand,) = m.candidates
+    assert cand.attempts == 2 and cand.status == "confirmed"
+    assert len(PUBLISHED) == 1
+
+
+def test_rejected_candidate_is_not_retried_from_the_same_place_or_too_often(mission):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    cand = mod.Candidate(1, PERSON.copy(), 0.5, status="rejected", attempts=1, last_stop=m.position())
+    assert not m.can_retry(cand)                       # still where it was tried
+    m.client.pos = m.client.pos + [cfg["confirm"]["retry_distance"] + 1, 0, 0]
+    assert m.can_retry(cand)
+    cand.attempts = cfg["confirm"]["max_attempts"]
+    assert not m.can_retry(cand)

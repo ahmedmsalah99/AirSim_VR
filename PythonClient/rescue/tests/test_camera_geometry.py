@@ -63,3 +63,14 @@ def test_bearing():
     assert bearing_deg((0, 0), (10, 0)) == pytest.approx(0)
     assert bearing_deg((0, 0), (0, 10)) == pytest.approx(90)
     assert bearing_deg((0, 0), (-10, 0)) == pytest.approx(180)
+
+
+def test_arc_point_keeps_distance_and_height():
+    from camera_geometry import arc_point
+    target, start = np.array([0.0, 0.0, 4.0]), np.array([-10.0, 0.0, -8.0])  # 10 m south of it
+    p = arc_point(target, start, 90)
+    assert p == pytest.approx([0, -10, -8])          # +90 deg: clockwise from above, south -> west
+    for a in (-30, 15, 30, 180):
+        q = arc_point(target, start, a)
+        assert np.hypot(*(q - target)[:2]) == pytest.approx(10)
+        assert q[2] == start[2]

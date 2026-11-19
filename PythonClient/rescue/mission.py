@@ -38,7 +38,7 @@ import numpy as np
 import setup_path  # noqa: F401  (puts this repo's airsim package on the path)
 import airsim
 
-from camera_geometry import confirm_viewpoint
+from camera_geometry import arc_point, bearing_deg, confirm_viewpoint
 from drone_camera import STRAIGHT_DOWN, DroneCamera
 from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_px, format_plan, fov_for_pixels,
                          load_config, plan_survey)
@@ -46,6 +46,8 @@ from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_p
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
 LANDED_HEIGHT_M = 0.5
+SLOW_DESCENT_M = 1.5      # the last bit of a landing is flown slowly
+FAST_DESCENT_SPEED = 3    # m/s above that
 MIN_SEARCH_SPEED = 0.3  # m/s; slower than this the search would never finish
 REPORT_EVERY_S = 5  # how often the search logs what it has been detecting
 STILL_SPEED = 0.3   # m/s
@@ -67,6 +69,8 @@ class Candidate:
     std: np.ndarray = None
     hits: int = 0
     frames: int = 0
+    attempts: int = 0
+    last_stop: np.ndarray = None    # where the drone left its lane for the last attempt
     events: list = field(default_factory=list)
 
 
@@ -165,6 +169,7 @@ class Mission:
             self.return_and_land()
         except KeyboardInterrupt:
             self.log("stopped by user")
+            self.reconnect()
             self.abort()
         except Exception as e:
             self.log(f"ERROR: {e!r}")
@@ -194,7 +199,11 @@ class Mission:
         height = self.height_above_ground()
         if height is not None and height > LANDED_HEIGHT_M:
             self.log(f"land returned {height:.1f} m above the ground; descending the rest")
-            c.moveToZAsync(self.position()[2] + height, 1, timeout_sec=height + MOVE_MARGIN_S,
+            if height > SLOW_DESCENT_M:  # fast down to just above the ground, then gently
+                c.moveToZAsync(self.position()[2] + height - SLOW_DESCENT_M, FAST_DESCENT_SPEED,
+                               timeout_sec=height / FAST_DESCENT_SPEED * 2 + MOVE_MARGIN_S, vehicle_name=self.name).join()
+                height = self.height_above_ground() or SLOW_DESCENT_M
+            c.moveToZAsync(self.position()[2] + height, 1, timeout_sec=height * 2 + MOVE_MARGIN_S,
                            vehicle_name=self.name).join()
             c.landAsync(timeout_sec=30, vehicle_name=self.name).join()
             height = self.height_above_ground()
@@ -237,14 +246,22 @@ class Mission:
     def abort(self):
         """Stopped early: fly home at the current altitude and land there (not into whatever is
         below). A second Ctrl+C while it's on the way lands it where it is."""
-        c = self.client
-        c.cancelLastTask(self.name)
+        self.client.cancelLastTask(self.name)
         try:
             self.return_and_land()
         except KeyboardInterrupt:
             self.log("stopped again: landing here")
-            c.cancelLastTask(self.name)
+            self.reconnect()
+            self.client.cancelLastTask(self.name)
             self.land()
+
+    def reconnect(self):
+        """A Ctrl+C in the middle of an AirSim call leaves the client unusable ("IOLoop is
+        already running"), so open a new connection before flying home."""
+        self.client = airsim.MultirotorClient(port=self.cfg["drone"]["port"])
+        self.client.confirmConnection()
+        self.client.enableApiControl(True, self.name)
+        self.camera.client = self.client
 
     def frame_rate(self, frames=3):
         """Search frames per second actually achieved: capture plus detection, timed."""
@@ -334,10 +351,20 @@ class Mission:
         self.scans["people"] += len(detections)
         for det in detections:
             feet = self.camera.ground_point(frame, det.center[0], det.y2, self.ground_z)
-            reason = ("not on the ground" if feet is None else "outside the area" if not self.in_area(feet)
-                      else "already known" if self.known(feet) else None)
-            if reason:
+            if feet is None or not self.in_area(feet):
+                reason = "not on the ground" if feet is None else "outside the area"
                 self.scans[reason] = self.scans.get(reason, 0) + 1
+                continue
+            near = self.nearby(feet)
+            if near is not None:
+                if self.can_retry(near):
+                    near.seen_at = feet
+                    w = self.to_world(feet)
+                    self.log(f"candidate {near.id} (rejected before) seen again at x={w[0]:.1f} y={w[1]:.1f} "
+                             f"from a new viewpoint; trying again")
+                    self.save(f"candidate{near.id}_search{near.attempts + 1}", frame, [det])
+                    return near
+                self.scans["already known"] = self.scans.get("already known", 0) + 1
                 continue
             cand = Candidate(len(self.candidates) + 1, feet, det.confidence)
             self.candidates.append(cand)
@@ -354,19 +381,32 @@ class Mission:
         self.log(f"  {s['frames']} frames, {s['people']} person detection(s)" + (f" (dropped: {dropped})" if dropped else ""))
         self.scans = {"frames": 0, "people": 0}
 
-    def known(self, p):
+    def nearby(self, p):
+        """The known candidate within merge_radius of p, or None."""
         r = self.cfg["confirm"]["merge_radius"]
         for cand in self.candidates:
             ref = cand.position if cand.position is not None else cand.seen_at
             if np.linalg.norm(ref[:2] - p[:2]) < r:
-                return True
-        return False
+                return cand
+        return None
+
+    def can_retry(self, cand):
+        """A rejected candidate gets another attempt (up to max_attempts) once it's seen again from
+        retry_distance or more from where it was last tried: from there the view may be clear."""
+        conf = self.cfg["confirm"]
+        return (cand.status == "rejected" and cand.attempts < conf["max_attempts"]
+                and np.linalg.norm(self.position()[:2] - cand.last_stop[:2]) >= conf["retry_distance"])
 
     def confirm(self, cand):
-        """Approach along the line of sight (staying above obstacles), zoom, check k of N frames,
-        publish, and return to where the lane was left."""
+        """Approach along the line of sight (never below min_altitude) and zoom, then look from
+        the approach point and, if the view is blocked, from points along an arc around the person
+        (same distance and height, still facing them) until one viewpoint sees them in `required`
+        of `frames` frames. Publish or reject, then go back along the arc and the line of sight
+        to where the lane was left."""
         c, conf = self.client, self.cfg["confirm"]
-        stop = self.position()
+        cand.attempts += 1
+        cand.status = "pending"
+        stop = cand.last_stop = self.position()
         c.hoverAsync(vehicle_name=self.name).join()
 
         # Descend along the line of sight towards the distance where the person is min_person_px,
@@ -379,7 +419,10 @@ class Mission:
         range_m = float(np.linalg.norm(point - cand.seen_at))
         fov = min(cam["hfov_deg"], max(conf["min_fov_deg"], fov_for_pixels(cam, det, range_m, conf["min_person_px"])))
         moves = np.linalg.norm(point - stop) > ARRIVE_RADIUS
-        self.log(f"confirming {cand.id}: line of sight {tilt:.0f} deg down, "
+        if not moves:
+            point = stop
+        self.log(f"confirming {cand.id}" + (f" (attempt {cand.attempts})" if cand.attempts > 1 else "")
+                 + f": line of sight {tilt:.0f} deg down, "
                  + (f"approaching to {range_m:.1f} m from it, {self.ground_z - point[2]:.1f} m up"
                     if moves else f"staying at {range_m:.1f} m from it")
                  + (f", zooming to {fov:.0f} deg" if fov < cam["hfov_deg"] else ""))
@@ -391,30 +434,24 @@ class Mission:
             self.goto(point, conf["speed"], heading, what="approach")
         if fov < cam["hfov_deg"]:
             self.camera.set_fov(fov)
-        self.wait_until_still()
 
-        # Hit or miss per frame from the scene image and the flat-ground projection: fast.
-        # Float depth images are very slow through AirSim's Python client, so depth is optional
-        # and fetched at most once, for the final position of a confirmed person.
-        positions, confidences = [], []
-        for i in range(conf["frames"]):
-            frame = self.camera.grab()
-            dets = self.detector.detect(frame.image)
-            self.save(f"candidate{cand.id}_confirm{i + 1}", frame, dets)
-            hit = None
-            for d in dets:
-                p = self.camera.ground_point(frame, d.center[0], d.y2, self.ground_z)
-                if p is not None and np.linalg.norm(p[:2] - cand.seen_at[:2]) < conf["match_radius"]:
-                    positions.append(p)
-                    confidences.append(d.confidence)
-                    hit = np.linalg.norm(p[:2] - cand.seen_at[:2])
-                    break
-            self.log(f"  frame {i + 1}/{conf['frames']}: " + (f"hit, {hit:.1f} m from the candidate" if hit is not None
-                                                             else f"miss ({len(dets)} person(s) elsewhere)"))
-            time.sleep(conf["frame_interval_s"])
+        positions, confidences, frames, angle, confirmed = [], [], 0, 0.0, False
+        for offset in conf["arc_offsets_deg"]:
+            if offset != angle:
+                self.log(f"  view blocked? moving {offset:+.0f} deg around it")
+                self.arc(cand.seen_at, point, angle, offset)
+                angle = offset
+            self.wait_until_still()
+            hits, confs = self.look(cand, f"{offset:+.0f}")
+            positions += hits
+            confidences += confs
+            frames += conf["frames"]
+            if len(hits) >= conf["required"]:
+                confirmed = True
+                break
 
-        cand.hits, cand.frames = len(positions), conf["frames"]
-        if cand.hits >= conf["required"]:
+        cand.hits, cand.frames = len(positions), frames
+        if confirmed:
             pts = np.array(positions)
             cand.status, cand.position = "confirmed", np.median(pts, axis=0)
             cand.std = np.maximum(pts.std(axis=0), 0.05)
@@ -423,16 +460,18 @@ class Mission:
                 cand.position = measured
             source = "depth camera" if measured is not None else f"ground projection, median of {cand.hits}"
             w = self.to_world(cand.position)
-            self.log(f"CONFIRMED victim {cand.id} at x={w[0]:.1f} y={w[1]:.1f} ({cand.hits}/{cand.frames} frames, "
-                     f"position from the {source})")
+            self.log(f"CONFIRMED victim {cand.id} at x={w[0]:.1f} y={w[1]:.1f} ({len(hits)}/{conf['frames']} frames "
+                     f"from the {angle:+.0f} deg view, position from the {source})")
             self.publisher.publish(cand.id, w, cand.std, float(np.mean(confidences)), cand.hits, cand.frames)
             self.mark(cand.position, CONFIRMED_COLOR, f"victim {cand.id}")
         else:
             cand.status = "rejected"
-            self.log(f"rejected candidate {cand.id}: found in {cand.hits}/{cand.frames} frames, "
-                     f"{conf['required']} needed")
+            self.log(f"rejected candidate {cand.id}: no viewpoint saw it in {conf['required']} of "
+                     f"{conf['frames']} frames ({cand.hits} hits in {cand.frames} frames)")
             self.mark(cand.seen_at, REJECTED_COLOR, f"x{cand.id}")
 
+        if angle != 0:
+            self.arc(cand.seen_at, point, angle, 0)
         if fov < cam["hfov_deg"]:
             self.camera.set_fov(cam["hfov_deg"])
         if moves:
@@ -440,6 +479,40 @@ class Mission:
             self.goto(stop, conf["speed"], heading, what="climb back")
         if not self.camera.set_tilt(self.plan.tilt_deg):
             self.log("WARNING: couldn't restore the camera tilt")
+
+    def arc(self, target, start, from_deg, to_deg):
+        """Fly around target from angle from_deg to to_deg (relative to start), in arc_step_deg
+        steps at start's distance and height, facing the target. The camera tilt stays valid:
+        it's relative to the drone, and the line-of-sight angle doesn't change on the arc."""
+        conf = self.cfg["confirm"]
+        steps = max(1, math.ceil(abs(to_deg - from_deg) / conf["arc_step_deg"]))
+        for i in range(1, steps + 1):
+            p = arc_point(target, start, from_deg + (to_deg - from_deg) * i / steps)
+            self.goto(p, conf["speed"], bearing_deg(p, target), what="arc")
+
+    def look(self, cand, view):
+        """frames frames from here: the positions and confidences of those that see the candidate.
+        Hit or miss per frame from the scene image and the flat-ground projection, which is fast;
+        float depth images are very slow through AirSim's Python client."""
+        conf = self.cfg["confirm"]
+        positions, confidences = [], []
+        for i in range(conf["frames"]):
+            frame = self.camera.grab()
+            dets = self.detector.detect(frame.image)
+            self.save(f"candidate{cand.id}_try{cand.attempts}_view{view}_{i + 1}", frame, dets)
+            hit = None
+            for d in dets:
+                p = self.camera.ground_point(frame, d.center[0], d.y2, self.ground_z)
+                if p is not None and np.linalg.norm(p[:2] - cand.seen_at[:2]) < conf["match_radius"]:
+                    positions.append(p)
+                    confidences.append(d.confidence)
+                    hit = np.linalg.norm(p[:2] - cand.seen_at[:2])
+                    break
+            self.log(f"  view {view}: frame {i + 1}/{conf['frames']}: "
+                     + (f"hit, {hit:.1f} m from the candidate" if hit is not None
+                        else f"miss ({len(dets)} person(s) elsewhere)"))
+            time.sleep(conf["frame_interval_s"])
+        return positions, confidences
 
     def depth_position(self, near, radius):
         """The person's feet measured with the depth camera (one frame), or None if not found."""
