@@ -19,8 +19,10 @@ class AIRSIM_API ASimModeWorldBoth : public ASimModeWorldBase
 public:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void reset() override;
 
 protected: //overrides
+    virtual bool isUpdatedByPhysicsWorld(msr::airlib::VehicleSimApiBase* api) const override;
     virtual void setupClockSpeed() override;
     virtual std::vector<std::unique_ptr<msr::airlib::ApiServerBase>> createApiServer() const override;
     virtual void getExistingVehiclePawns(TArray<AActor*>& pawns) const override;

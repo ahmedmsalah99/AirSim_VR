@@ -77,7 +77,31 @@ void ASimModeWorldBoth::setupClockSpeed()
             "clock_type %s is not recognized", clock_type.c_str()));
 }
 
+void ASimModeWorldBoth::reset()
+{
+    //resets the multirotors, which are in the physics world
+    Super::reset();
+
+    //the cars aren't, so reset them here, on the game thread that updates them
+    UAirBlueprintLib::RunCommandOnGameThread([this]() {
+        for (auto& api : getApiProvider()->getVehicleSimApis())
+            if (!isUpdatedByPhysicsWorld(api))
+                api->reset();
+    }, true);
+}
+
 //-------------------------------- overrides -----------------------------------------------//
+
+//A car updates itself on its pawn's tick, on the game thread (PawnSimApi::pawnTick), which is
+//where its UE vehicle movement may be read safely. If the physics world updated it too, on its
+//own thread every 3 ms, the two threads would change the car's state at once: they corrupted
+//its GPS sensor's delay line and crashed the editor (access violation in DelayLine::update).
+//Multirotors are the opposite: their pawn tick does nothing and the physics world updates them.
+bool ASimModeWorldBoth::isUpdatedByPhysicsWorld(msr::airlib::VehicleSimApiBase* api) const
+{
+    APawn* pawn = static_cast<PawnSimApi*>(api)->getPawn();
+    return getVehicleType(pawn) != AirSimSettings::kVehicleTypePhysXCar;
+}
 
 std::vector<std::unique_ptr<msr::airlib::ApiServerBase>> ASimModeWorldBoth::createApiServer() const
 {
@@ -179,7 +203,9 @@ std::unique_ptr<PawnSimApi> ASimModeWorldBoth::createVehicleSimApi(
         auto vehicle_pawn = static_cast<TCarPawn*>(pawn_sim_api_params.pawn);
         auto vehicle_sim_api = std::unique_ptr<PawnSimApi>(new CarPawnSimApi(pawn_sim_api_params, vehicle_pawn->getKeyBoardControls(), vehicle_pawn->getVehicleMovementComponent()));
         vehicle_sim_api->initialize();
-        // vehicle_sim_api->reset();
+        //the car isn't in the physics world (see isUpdatedByPhysicsWorld), so its reset isn't
+        //done by the world's: reset it here, as SimModeCar does, before its first update
+        vehicle_sim_api->reset();
         return vehicle_sim_api;
     } else {
         auto vehicle_sim_api = std::unique_ptr<PawnSimApi>(new MultirotorPawnSimApi(pawn_sim_api_params));

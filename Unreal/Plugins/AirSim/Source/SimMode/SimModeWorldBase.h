@@ -39,6 +39,13 @@ protected:
     //should be called by derived class once all api_provider_ is ready to use
     void initializeForPlay();
 
+    //whether the physics world updates this vehicle on its own thread; vehicles it
+    //doesn't update (cars in the "Both" mode) update themselves on their pawn's tick
+    virtual bool isUpdatedByPhysicsWorld(msr::airlib::VehicleSimApiBase* /*api*/) const
+    {
+        return true;
+    }
+
     long long getPhysicsLoopPeriod() const;
     void setPhysicsLoopPeriod(long long  period);
 private:
