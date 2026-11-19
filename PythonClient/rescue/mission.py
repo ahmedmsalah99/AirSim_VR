@@ -125,7 +125,12 @@ class Mission:
         # point. Measure it with the depth camera instead of assuming the drone starts on it
         # (it can be held at its spawn height): a wrong ground puts every detected person's
         # feet in the wrong place and lands the drone in mid-air.
+        self.log("measuring the ground below with the depth camera")
+        start = time.time()
         below = self.height_above_ground()
+        if time.time() - start > 5:
+            self.log(f"WARNING: that took {time.time() - start:.0f} s; depth images are probably still "
+                     f"1280x720. Copy the repo's settings.json to Documents\\AirSim (depth is 320x180 there)")
         if below is None:
             below = 0.0
             self.log("WARNING: couldn't measure the ground below; assuming the drone is on it")

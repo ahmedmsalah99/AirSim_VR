@@ -112,3 +112,21 @@ def test_depth_point_scales_pixels_to_a_smaller_depth_image():
     frame = types.SimpleNamespace(depth=depth, pos=np.zeros(3), q=quat(0, 0, 0), intr=cam.intr)
     assert cam.depth_point(frame, 960, 540)[0] == pytest.approx(10.0)  # planar depth along the forward axis
     assert cam.depth_point(frame, 100, 100)[0] == pytest.approx(50.0)
+
+
+def test_center_depth_requests_only_the_depth_image():
+    client = FakeClient()
+    requests = []
+
+    def simGetImages(reqs, vehicle_name):
+        requests.extend(reqs)
+        depth = np.full((180, 320), 30.0, np.float32)
+        depth[72:108, 128:192] = 5.0
+        return [types.SimpleNamespace(image_data_float=depth.ravel().tolist(), width=320, height=180)]
+
+    client.simGetImages = simGetImages
+    airsim = types.SimpleNamespace(to_quaternion=quat, ImageRequest=lambda *a: a,
+                                   ImageType=types.SimpleNamespace(Scene=0, DepthPlanner=1))
+    cam = DroneCamera(client, airsim, CFG)
+    assert cam.center_depth() == pytest.approx(5.0)
+    assert requests == [("bottom_center", 1, True, False)]  # one float depth image, no scene image

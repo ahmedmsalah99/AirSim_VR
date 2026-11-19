@@ -132,7 +132,13 @@ class DroneCamera:
         return depth_point(frame.intr, frame.pos, frame.q, u, v, d)
 
     def center_depth(self):
-        """Median planar depth in the middle of the view (height above ground when looking down)."""
-        depth = self.grab(with_depth=True).depth
+        """Median planar depth in the middle of the view (height above ground when looking down).
+
+        Fetches only the depth image: float images are slow through AirSim's Python client,
+        so keep them small (320x180 in settings.json).
+        """
+        request = self.airsim.ImageRequest(self.camera, self.airsim.ImageType.DepthPlanner, True, False)
+        d = self.client.simGetImages([request], vehicle_name=self.vehicle)[0]
+        depth = np.array(d.image_data_float, np.float32).reshape(d.height, d.width)
         h, w = depth.shape
         return float(np.median(depth[2 * h // 5:3 * h // 5, 2 * w // 5:3 * w // 5]))
