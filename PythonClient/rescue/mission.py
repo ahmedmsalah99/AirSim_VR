@@ -54,6 +54,7 @@ REPORT_EVERY_S = 5  # how often the search logs what it has been detecting
 STILL_SPEED = 0.3   # m/s
 LOOKAHEAD_PER_SPEED = 0.6  # AirSim's auto lookahead: 4.8 m at 8 m/s, 0.9 m at 1.5 m/s
 MIN_MOVE_SPEED = 1.0
+SIGHTING_GAP_FRAMES = 5  # a sighting not detected again within this many search frames is forgotten
 MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
 LANE_COLOR = [0.0, 1.0, 0.2, 1.0]
 AREA_COLOR = [1.0, 0.6, 0.0, 1.0]
@@ -77,6 +78,15 @@ class Candidate:
     events: list = field(default_factory=list)
 
 
+@dataclass
+class Sighting:
+    """A new person detected in search frames, not yet a candidate (see search.frames_to_confirm)."""
+    positions: list
+    confidence: float  # the best so far
+    frames: int
+    last_frame: int
+
+
 class Mission:
     def __init__(self, cfg, plan, detect=True, victim=None):
         self.cfg, self.plan, self.victim = cfg, plan, victim
@@ -96,6 +106,7 @@ class Mission:
         self.t0 = time.time()
         self.speed = plan.speed
         self.scans = {"frames": 0, "people": 0}
+        self.sightings, self.frame_no = [], 0
         self.image_dir = OUTPUT_DIR / f"mission_{time.strftime('%Y%m%d_%H%M%S')}"
         if getattr(self.detector, "device", None):
             self.log(f"detector on {self.detector.device}: {self.detector.seconds_per_tile:.2f} s per tile")
@@ -400,9 +411,11 @@ class Mission:
             self.report_scans()
 
     def scan(self):
-        """One frame: the first person not seen before, as a new Candidate, or None."""
+        """One frame: a person not seen before, as a new Candidate, once they've been detected in
+        search.frames_to_confirm frames (or a rejected one due a retry); else None."""
         frame = self.camera.grab()
         detections = self.detector.detect(frame.image)
+        self.frame_no += 1
         self.scans["frames"] += 1
         self.scans["people"] += len(detections)
         min_conf = self.cfg["search"]["min_candidate_confidence"]
@@ -427,13 +440,37 @@ class Mission:
                     return near
                 self.scans["already known"] = self.scans.get("already known", 0) + 1
                 continue
-            cand = Candidate(len(self.candidates) + 1, feet, det.confidence)
+            sighting = self.sight(feet, det.confidence)
+            if sighting.frames < self.cfg["search"]["frames_to_confirm"]:
+                self.scans["new, waiting for more frames"] = self.scans.get("new, waiting for more frames", 0) + 1
+                continue
+            self.sightings.remove(sighting)
+            cand = Candidate(len(self.candidates) + 1, np.median(sighting.positions, axis=0), sighting.confidence)
             self.candidates.append(cand)
-            w = self.to_world(feet)
-            self.log(f"candidate {cand.id} at x={w[0]:.1f} y={w[1]:.1f} (confidence {det.confidence:.2f})")
+            w = self.to_world(cand.seen_at)
+            self.log(f"candidate {cand.id} at x={w[0]:.1f} y={w[1]:.1f} (seen in {sighting.frames} frames, "
+                     f"best confidence {sighting.confidence:.2f})")
             self.save(f"candidate{cand.id}_search", frame, [det])
             return cand
         return None
+
+    def sight(self, feet, confidence):
+        """Count a new person's detection towards the search frames_to_confirm: added to the
+        sighting within merge_radius that this frame hasn't counted yet, or a new sighting.
+        Sightings not seen for SIGHTING_GAP_FRAMES frames are forgotten (a false detection
+        doesn't build up over a whole lane)."""
+        self.sightings = [s for s in self.sightings if self.frame_no - s.last_frame <= SIGHTING_GAP_FRAMES]
+        r = self.cfg["confirm"]["merge_radius"]
+        for s in self.sightings:
+            if s.last_frame != self.frame_no and np.linalg.norm(np.median(s.positions, axis=0)[:2] - feet[:2]) < r:
+                s.positions.append(feet)
+                s.frames += 1
+                s.last_frame = self.frame_no
+                s.confidence = max(s.confidence, confidence)
+                return s
+        s = Sighting([feet], confidence, 1, self.frame_no)
+        self.sightings.append(s)
+        return s
 
     def report_scans(self):
         """Log what the search frames since the last report saw, including what was dropped and why."""

@@ -501,3 +501,27 @@ def test_short_moves_slow_down_so_airsim_doesnt_end_them_at_once(mission):
     assert m.client.moves[-1][1] == pytest.approx(3.0)       # lookahead 0.6 * 3 = 1.8 m, inside the move
     m.goto(m.client.pos + np.array([50, 0, 0]), 8, heading=0)
     assert m.client.moves[-1][1] == 8                         # long moves keep their speed
+
+
+def test_a_new_person_needs_frames_to_confirm_search_frames(mission, monkeypatch):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.ground_z = GROUND_Z
+    person = [types.SimpleNamespace(center=(640, 400), y2=420, confidence=0.8)]
+    seen = iter([person, person, [], person])
+    monkeypatch.setattr(FakeDetector, "detect", lambda self, image: next(seen))
+    assert [m.scan() for _ in range(3)] == [None, None, None]  # 2 frames so far
+    cand = m.scan()                                             # the 3rd, after a gap of one frame
+    assert cand is not None and cand.seen_at == pytest.approx(PERSON)
+
+
+def test_a_sighting_is_forgotten_after_a_long_gap(mission, monkeypatch):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.ground_z = GROUND_Z
+    person = [types.SimpleNamespace(center=(640, 400), y2=420, confidence=0.8)]
+    seen = iter([person, person] + [[]] * (mod.SIGHTING_GAP_FRAMES + 1) + [person])
+    monkeypatch.setattr(FakeDetector, "detect", lambda self, image: next(seen))
+    assert all(m.scan() is None for _ in range(mod.SIGHTING_GAP_FRAMES + 4))  # the count started over
