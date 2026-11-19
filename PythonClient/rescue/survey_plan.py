@@ -191,8 +191,12 @@ def plan_at_altitude(cfg, altitude):
     speed = min(speed_limits.values())
     max_spacing = band.swath_m * (1 - search["side_overlap"])
 
+    # Lanes along the axis set in the config, or ("auto") whichever gives the shorter mission.
+    fixed = search.get("lane_axis", "auto")
+    if fixed not in ("x", "y", "auto"):
+        raise InfeasiblePlan(f"search.lane_axis must be x, y or auto, not {fixed!r}")
     best = None
-    for axis in ("x", "y"):
+    for axis in (("x", "y") if fixed == "auto" else (fixed,)):
         lanes, spacing = _lanes(area, axis, band, max_spacing)
         length = _path_length(lanes)
         time_s = length / speed + (len(lanes) - 1) * drone["turn_time_s"]

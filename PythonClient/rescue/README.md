@@ -53,7 +53,7 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
 
 1. **Detection band:** from the bottom edge of the image (`near`) to wherever comes first, the top edge of the image or that range (`far`). `near` and `far` are distances ahead of the drone.
 2. **Swath:** the ground width covered at the far edge, `2 × depth × tan(hfov / 2)`. Every point within half a swath of the lane crosses the band.
-3. **Lane spacing** = swath × (1 − `side_overlap`), spread evenly so the outer lanes just reach the edges. Lanes run along whichever axis gives the shorter mission and alternate direction; the drone faces its direction of travel. Each lane is shifted back by `near`, so the band starts on the area's edge and ends just past the far edge.
+3. **Lane spacing** = swath × (1 − `side_overlap`), spread evenly so the outer lanes just reach the edges. Lanes run along `search.lane_axis` (`x` or `y`; `auto` picks whichever gives the shorter mission, usually the long side) and alternate direction; the drone faces its direction of travel. Each lane is shifted back by `near`, so the band starts on the area's edge and ends just past the far edge.
 4. **Speed** is the slowest of:
    - `max_speed` of the drone,
    - motion blur: image motion is fastest at the near edge, `v·sin²(a)/h` rad/s, so `v ≤ max_blur_px × h / (f × sin²(a_near) × exposure_s)`,
