@@ -5,6 +5,7 @@ in another terminal, then:
 
     python mission.py               # full mission
     python mission.py --no-detect   # just fly the search pattern
+    python mission.py --victim Victim_01   # test one person: view, detect, confirm, land
 
 1. Take off, climb to the planned altitude, tilt the camera (survey_plan.py).
 2. Fly the lanes facing forward. Every frame goes through the detector; a
@@ -75,8 +76,8 @@ class Candidate:
 
 
 class Mission:
-    def __init__(self, cfg, plan, detect=True):
-        self.cfg, self.plan = cfg, plan
+    def __init__(self, cfg, plan, detect=True, victim=None):
+        self.cfg, self.plan, self.victim = cfg, plan, victim
         drone = cfg["drone"]
         self.name = drone["name"]
         self.spawn = np.array(drone["spawn_ned"], float)
@@ -116,6 +117,8 @@ class Mission:
         return np.array([p.x_val, p.y_val, p.z_val])
 
     def in_area(self, p):
+        if self.victim:
+            return True  # testing one person, who needn't be inside the search area
         (ax, ay), (bx, by) = self.cfg["area"]["corner_a"], self.cfg["area"]["corner_b"]
         x, y = self.to_world(p)[:2]
         margin = self.cfg["confirm"]["merge_radius"]
@@ -158,7 +161,7 @@ class Mission:
             c.moveToZAsync(self.z, self.cfg["drone"]["climb_speed"], timeout_sec=climb_s,
                            yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name).join()
 
-            for i, lane in enumerate(plan.lanes):
+            for i, lane in (() if self.victim else enumerate(plan.lanes)):
                 self.log(f"to the start of lane {i + 1}/{plan.lane_count}")
                 if i == 0:
                     self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg,
@@ -175,7 +178,10 @@ class Mission:
                 self.log(f"lane {i + 1}/{plan.lane_count} at {self.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")
                 self.sweep(self.at_altitude(lane.end), self.speed, lane.heading_deg)
 
-            self.log("search complete")
+            if self.victim:
+                self.check_victim(self.victim)
+            else:
+                self.log("search complete")
             self.return_and_land()
         except KeyboardInterrupt:
             self.log("stopped by user")
@@ -195,6 +201,32 @@ class Mission:
             except Exception as e:
                 self.log(f"couldn't reset the camera: {e!r}")
             self.report()
+
+    def check_victim(self, tag, max_frames=10):
+        """Test the detection and confirmation on one tagged person: fly to where a lane would
+        see them (mid detection band, at the search altitude and tilt, facing them, coming from
+        the drone's side), look until they're detected, then confirm them as the search would."""
+        p = self.client.simGetObjectPose(tag).position
+        if math.isnan(p.x_val):
+            raise RuntimeError(f"no actor tagged {tag!r} in the level (Details > Actor > Tags)")
+        target = np.append(self.to_local((p.x_val, p.y_val)), self.ground_z)
+        here = self.position()
+        away = here[:2] - target[:2]
+        away = away / np.linalg.norm(away) if np.linalg.norm(away) > 1e-6 else np.array([-1.0, 0.0])
+        ahead = (self.plan.band.near_m + self.plan.band.far_m) / 2
+        view = np.append(target[:2] + away * ahead, self.z)
+        heading = bearing_deg(view, target)
+        self.log(f"to the search view of {tag}: {ahead:.0f} m back from it, {self.plan.altitude:.0f} m up, "
+                 f"facing it (heading {heading:.0f} deg)")
+        self.goto(view, self.cfg["drone"]["transit_speed"], heading, what=f"move to view {tag}")
+        self.wait_until_still()
+        for i in range(max_frames):
+            candidate = self.scan()
+            if candidate is not None:
+                self.confirm(candidate)
+                return
+        self.report_scans()
+        self.log(f"{tag} wasn't detected in {max_frames} frames from the search view")
 
     def return_and_land(self):
         self.log("returning home")
@@ -614,6 +646,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG)
     parser.add_argument("--no-detect", action="store_true", help="fly the search pattern without detecting")
+    parser.add_argument("--victim", metavar="TAG",
+                        help="instead of the search, test one tagged person: view them as a lane would, "
+                             "detect, confirm, land")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -622,7 +657,9 @@ def main():
     except InfeasiblePlan as e:
         sys.exit(f"Plan is infeasible: {e}")
     print(format_plan(plan))
-    Mission(cfg, plan, detect=not args.no_detect).run()
+    if args.victim and args.no_detect:
+        sys.exit("--victim needs the detector; drop --no-detect")
+    Mission(cfg, plan, detect=not args.no_detect, victim=args.victim).run()
 
 
 if __name__ == "__main__":
