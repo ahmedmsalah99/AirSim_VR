@@ -52,8 +52,11 @@ search:
   side_overlap: 0.2             # overlap between neighbouring lanes
   lane_axis: x                  # lanes run along x or y; auto = whichever gives the shorter mission
   max_blur_px: 1.0              # motion blur allowed during one exposure
-  min_frames_per_point: 3       # frames every ground point must appear in
+  min_frames_per_point: 6       # frames every ground point must appear in: twice frames_to_confirm,
+                                #   since the detector misses some
   min_candidate_confidence: 0.4 # weaker search detections don't start a confirmation
+  frames_to_confirm: 3          # a new person must be detected in this many search frames (within
+                                #   confirm.merge_radius, none more than 5 frames apart) to start a confirmation
 
 confirm:
   min_person_px: 40             # approach and zoom until a person is this big

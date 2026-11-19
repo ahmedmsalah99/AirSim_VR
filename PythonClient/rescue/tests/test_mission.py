@@ -38,7 +38,7 @@ class FakeClient:
             self.pos = self.moving.copy() if n < 2 else self.pos + step / n * 2
         p = types.SimpleNamespace(x_val=self.pos[0], y_val=self.pos[1], z_val=self.pos[2])
         v = types.SimpleNamespace(x_val=0.0, y_val=0.0, z_val=0.0)
-        landed = 0 if self.pos[2] >= GROUND_Z - 0.1 else 1
+        landed = 0 if self.pos[2] >= GROUND_Z - 0.01 else 1
         return types.SimpleNamespace(landed_state=landed,
                                      kinematics_estimated=types.SimpleNamespace(position=p, linear_velocity=v))
 
@@ -52,6 +52,10 @@ class FakeClient:
 
     def landAsync(self, **kw):
         return Future(self, (self.pos[0], self.pos[1], GROUND_Z))
+
+    def moveByVelocityAsync(self, vx, vy, vz, duration, **kw):
+        self.moves.append((self.pos + np.array([vx, vy, vz]) * duration, "velocity"))
+        return Future(self, (self.pos[0], self.pos[1], min(self.pos[2] + vz * duration, GROUND_Z)))
 
     def hoverAsync(self, **kw):
         self.moving = None
@@ -310,15 +314,14 @@ def test_second_ctrl_c_lands_where_it_is(mission, capsys):
 
 
 class StuckLanding(FakeClient):
-    """landAsync returns at once the first time, leaving the drone in the air."""
-
-    def __init__(self, port):
-        super().__init__(port)
-        self.lands = 0
+    """landAsync returns at once, leaving the drone in the air, and a moveToZ never gets
+    closer than 1.5 m to the ground (as AirSim's, which hovered there)."""
 
     def landAsync(self, **kw):
-        self.lands += 1
-        return Future(self) if self.lands == 1 else super().landAsync(**kw)
+        return Future(self)
+
+    def moveToZAsync(self, z, v, **kw):
+        return Future(self, (self.pos[0], self.pos[1], min(z, GROUND_Z - 1.5)))
 
 
 def test_landing_is_checked_and_finished(mission, capsys):
@@ -501,3 +504,27 @@ def test_short_moves_slow_down_so_airsim_doesnt_end_them_at_once(mission):
     assert m.client.moves[-1][1] == pytest.approx(3.0)       # lookahead 0.6 * 3 = 1.8 m, inside the move
     m.goto(m.client.pos + np.array([50, 0, 0]), 8, heading=0)
     assert m.client.moves[-1][1] == 8                         # long moves keep their speed
+
+
+def test_a_new_person_needs_frames_to_confirm_search_frames(mission, monkeypatch):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.ground_z = GROUND_Z
+    person = [types.SimpleNamespace(center=(640, 400), y2=420, confidence=0.8)]
+    seen = iter([person, person, [], person])
+    monkeypatch.setattr(FakeDetector, "detect", lambda self, image: next(seen))
+    assert [m.scan() for _ in range(3)] == [None, None, None]  # 2 frames so far
+    cand = m.scan()                                             # the 3rd, after a gap of one frame
+    assert cand is not None and cand.seen_at == pytest.approx(PERSON)
+
+
+def test_a_sighting_is_forgotten_after_a_long_gap(mission, monkeypatch):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.ground_z = GROUND_Z
+    person = [types.SimpleNamespace(center=(640, 400), y2=420, confidence=0.8)]
+    seen = iter([person, person] + [[]] * (mod.SIGHTING_GAP_FRAMES + 1) + [person])
+    monkeypatch.setattr(FakeDetector, "detect", lambda self, image: next(seen))
+    assert all(m.scan() is None for _ in range(mod.SIGHTING_GAP_FRAMES + 4))  # the count started over
