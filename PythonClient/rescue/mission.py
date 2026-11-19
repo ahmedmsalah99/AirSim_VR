@@ -46,6 +46,7 @@ from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_p
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
 LANDED_HEIGHT_M = 0.5
+REPORT_EVERY_S = 5  # how often the search logs what it has been detecting
 STILL_SPEED = 0.3   # m/s
 MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
 LANE_COLOR = [0.0, 1.0, 0.2, 1.0]
@@ -85,6 +86,7 @@ class Mission:
         self.candidates = []
         self.events = []
         self.t0 = time.time()
+        self.scans = {"frames": 0, "people": 0}
         self.image_dir = OUTPUT_DIR / f"mission_{time.strftime('%Y%m%d_%H%M%S')}"
 
     # ---- bookkeeping -------------------------------------------------------------------
@@ -119,13 +121,16 @@ class Mission:
         c.enableApiControl(True, self.name)
         c.armDisarm(True, self.name)
 
-        # Altitudes are measured from the ground under the takeoff point.
-        state = c.getMultirotorState(vehicle_name=self.name)
-        self.ground_z = self.position()[2]
-        if state.landed_state != airsim.LandedState.Landed:
-            self.camera.set_tilt(STRAIGHT_DOWN)
-            self.ground_z += self.camera.center_depth()
-            self.log(f"already flying, {self.ground_z - self.position()[2]:.1f} m above the ground")
+        # Altitudes, ground positions and the landing all use the ground under the take-off
+        # point. Measure it with the depth camera instead of assuming the drone starts on it
+        # (it can be held at its spawn height): a wrong ground puts every detected person's
+        # feet in the wrong place and lands the drone in mid-air.
+        below = self.height_above_ground()
+        if below is None:
+            below = 0.0
+            self.log("WARNING: couldn't measure the ground below; assuming the drone is on it")
+        self.ground_z = self.position()[2] + below
+        self.log(f"ground is {below:.1f} m below the drone")
         self.z = self.ground_z - plan.altitude
         self.draw_plan()
         if not self.camera.set_tilt(plan.tilt_deg):
@@ -177,16 +182,24 @@ class Mission:
         """Land, and check it: landAsync can return with the drone still in the air."""
         c = self.client
         c.landAsync(timeout_sec=60, vehicle_name=self.name).join()
-        height = self.ground_z - self.position()[2]
-        if height > LANDED_HEIGHT_M:
+        height = self.height_above_ground()
+        if height is not None and height > LANDED_HEIGHT_M:
             self.log(f"land returned {height:.1f} m above the ground; descending the rest")
-            c.moveToZAsync(self.ground_z, 1, timeout_sec=height + MOVE_MARGIN_S, vehicle_name=self.name).join()
+            c.moveToZAsync(self.position()[2] + height, 1, timeout_sec=height + MOVE_MARGIN_S,
+                           vehicle_name=self.name).join()
             c.landAsync(timeout_sec=30, vehicle_name=self.name).join()
-            height = self.ground_z - self.position()[2]
-        if height > LANDED_HEIGHT_M:
-            self.log(f"WARNING: still {height:.1f} m above the take-off ground (on something?)")
+            height = self.height_above_ground()
+        if height is not None and height > LANDED_HEIGHT_M:
+            self.log(f"WARNING: still {height:.1f} m above the ground")
         c.armDisarm(False, self.name)
-        self.log(f"landed ({max(height, 0):.1f} m above the take-off ground)")
+        self.log("landed" + (f" ({max(height, 0):.1f} m above the ground)" if height is not None else ""))
+
+    def height_above_ground(self):
+        """Height above whatever is straight below, from the depth camera, or None."""
+        if not self.camera.set_tilt(STRAIGHT_DOWN):
+            return None
+        d = self.camera.center_depth()
+        return d if 0 <= d < 200 else None
 
     def wait_until_still(self, timeout_s=6):
         """Hover until the drone has stopped moving, so frames aren't taken mid-sway."""
@@ -257,24 +270,36 @@ class Mission:
         self.face(heading)
         c.moveToPositionAsync(*target, speed, yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name)
         deadline = time.time() + 2 * np.linalg.norm(target - self.position()) / speed + 30
+        last_report = time.time()
         while np.linalg.norm(self.position()[:2] - target[:2]) > ARRIVE_RADIUS:
             if time.time() > deadline:
                 self.log("WARNING: lane took too long; moving on")
                 break
             candidate = self.scan()
+            if time.time() - last_report > REPORT_EVERY_S:
+                self.report_scans()
+                last_report = time.time()
             if candidate is None:
                 continue
             self.confirm(candidate)
             self.face(heading)
             c.moveToPositionAsync(*target, speed, yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name)
             deadline = time.time() + 2 * np.linalg.norm(target - self.position()) / speed + 30
+        if self.scans["frames"]:
+            self.report_scans()
 
     def scan(self):
         """One frame: the first person not seen before, as a new Candidate, or None."""
         frame = self.camera.grab()
-        for det in self.detector.detect(frame.image):
+        detections = self.detector.detect(frame.image)
+        self.scans["frames"] += 1
+        self.scans["people"] += len(detections)
+        for det in detections:
             feet = self.camera.ground_point(frame, det.center[0], det.y2, self.ground_z)
-            if feet is None or not self.in_area(feet) or self.known(feet):
+            reason = ("not on the ground" if feet is None else "outside the area" if not self.in_area(feet)
+                      else "already known" if self.known(feet) else None)
+            if reason:
+                self.scans[reason] = self.scans.get(reason, 0) + 1
                 continue
             cand = Candidate(len(self.candidates) + 1, feet, det.confidence)
             self.candidates.append(cand)
@@ -283,6 +308,13 @@ class Mission:
             self.save(f"candidate{cand.id}_search", frame, [det])
             return cand
         return None
+
+    def report_scans(self):
+        """Log what the search frames since the last report saw, including what was dropped and why."""
+        s = self.scans
+        dropped = ", ".join(f"{n} {k}" for k, n in s.items() if k not in ("frames", "people"))
+        self.log(f"  {s['frames']} frames, {s['people']} person detection(s)" + (f" (dropped: {dropped})" if dropped else ""))
+        self.scans = {"frames": 0, "people": 0}
 
     def known(self, p):
         r = self.cfg["confirm"]["merge_radius"]
