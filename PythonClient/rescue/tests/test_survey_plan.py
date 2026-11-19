@@ -92,9 +92,9 @@ def test_lanes_are_shifted_back_so_the_band_covers_the_area_edges():
     assert (second.start[0], second.end[0], second.heading_deg) == pytest.approx((300 + near, 0 + near, 180))
 
 
-def test_lanes_run_along_long_side():
-    assert plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[300, 60])).lane_axis == "x"
-    plan = plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[60, 300]))
+def test_lanes_run_along_long_side_on_auto():
+    assert plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[300, 60], search__lane_axis="auto")).lane_axis == "x"
+    plan = plan_survey(cfg(area__corner_a=[0, 0], area__corner_b=[60, 300], search__lane_axis="auto"))
     assert plan.lane_axis == "y"
     assert {lane.heading_deg for lane in plan.lanes} == {90, -90}
 
@@ -106,3 +106,17 @@ def test_zoom_fov_gives_the_wanted_person_size():
     assert detection_range(zoomed, dict(c["detector"], min_person_px=40)) == pytest.approx(25)
     assert fov_for_pixels(c["camera"], c["detector"], detection_range(c["camera"], c["detector"]),
                           c["detector"]["min_person_px"]) == pytest.approx(c["camera"]["hfov_deg"])
+
+
+def test_fixed_lane_axis_gives_more_shorter_lanes_across_a_wide_area():
+    wide = dict(area__corner_a=[-25, -60], area__corner_b=[25, 60])
+    auto = plan_survey(cfg(search__lane_axis="auto", **wide))
+    along_x = plan_survey(cfg(search__lane_axis="x", **wide))
+    assert auto.lane_axis == "y" and along_x.lane_axis == "x"
+    assert along_x.lane_count > auto.lane_count
+    assert {abs(lane.end[0] - lane.start[0]) for lane in along_x.lanes} == {50}
+
+
+def test_bad_lane_axis_is_rejected():
+    with pytest.raises(InfeasiblePlan):
+        plan_survey(cfg(search__lane_axis="z"))

@@ -7,8 +7,8 @@
 # Heights are metres above the ground at the drone's takeoff point.
 
 area:
-  corner_a: [-25, -25]          # any two opposite corners of the search rectangle
-  corner_b: [25, 25]
+  corner_a: [-25, -60]          # any two opposite corners of the search rectangle
+  corner_b: [25, 60]
   max_obstacle_height: 15       # tallest building or tree inside the rectangle
 
 drone:
@@ -46,6 +46,7 @@ search:
   min_altitude: 10
   max_altitude: 25
   side_overlap: 0.2             # overlap between neighbouring lanes
+  lane_axis: x                  # lanes run along x or y; auto = whichever gives the shorter mission
   max_blur_px: 1.0              # motion blur allowed during one exposure
   min_frames_per_point: 3       # frames every ground point must appear in
   min_candidate_confidence: 0.4 # weaker search detections don't start a confirmation
