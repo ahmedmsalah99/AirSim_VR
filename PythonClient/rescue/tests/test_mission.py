@@ -38,7 +38,7 @@ class FakeClient:
             self.pos = self.moving.copy() if n < 2 else self.pos + step / n * 2
         p = types.SimpleNamespace(x_val=self.pos[0], y_val=self.pos[1], z_val=self.pos[2])
         v = types.SimpleNamespace(x_val=0.0, y_val=0.0, z_val=0.0)
-        landed = 0 if self.pos[2] >= GROUND_Z - 0.1 else 1
+        landed = 0 if self.pos[2] >= GROUND_Z - 0.01 else 1
         return types.SimpleNamespace(landed_state=landed,
                                      kinematics_estimated=types.SimpleNamespace(position=p, linear_velocity=v))
 
@@ -52,6 +52,10 @@ class FakeClient:
 
     def landAsync(self, **kw):
         return Future(self, (self.pos[0], self.pos[1], GROUND_Z))
+
+    def moveByVelocityAsync(self, vx, vy, vz, duration, **kw):
+        self.moves.append((self.pos + np.array([vx, vy, vz]) * duration, "velocity"))
+        return Future(self, (self.pos[0], self.pos[1], min(self.pos[2] + vz * duration, GROUND_Z)))
 
     def hoverAsync(self, **kw):
         self.moving = None
@@ -310,15 +314,14 @@ def test_second_ctrl_c_lands_where_it_is(mission, capsys):
 
 
 class StuckLanding(FakeClient):
-    """landAsync returns at once the first time, leaving the drone in the air."""
-
-    def __init__(self, port):
-        super().__init__(port)
-        self.lands = 0
+    """landAsync returns at once, leaving the drone in the air, and a moveToZ never gets
+    closer than 1.5 m to the ground (as AirSim's, which hovered there)."""
 
     def landAsync(self, **kw):
-        self.lands += 1
-        return Future(self) if self.lands == 1 else super().landAsync(**kw)
+        return Future(self)
+
+    def moveToZAsync(self, z, v, **kw):
+        return Future(self, (self.pos[0], self.pos[1], min(z, GROUND_Z - 1.5)))
 
 
 def test_landing_is_checked_and_finished(mission, capsys):

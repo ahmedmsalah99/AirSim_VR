@@ -49,6 +49,7 @@ ARRIVE_RADIUS = 1.5
 LANDED_HEIGHT_M = 0.5
 SLOW_DESCENT_M = 1.5      # the last bit of a landing is flown slowly
 FAST_DESCENT_SPEED = 3    # m/s above that
+SINK_SPEED = 0.7          # m/s, the last SLOW_DESCENT_M of a landing
 MIN_SEARCH_SPEED = 0.3  # m/s; slower than this the search would never finish
 REPORT_EVERY_S = 5  # how often the search logs what it has been detecting
 STILL_SPEED = 0.3   # m/s
@@ -259,9 +260,15 @@ class Mission:
                 c.moveToZAsync(self.position()[2] + height - SLOW_DESCENT_M, FAST_DESCENT_SPEED,
                                timeout_sec=height / FAST_DESCENT_SPEED * 2 + MOVE_MARGIN_S, vehicle_name=self.name).join()
                 height = self.height_above_ground() or SLOW_DESCENT_M
-            c.moveToZAsync(self.position()[2] + height, 1, timeout_sec=height * 2 + MOVE_MARGIN_S,
-                           vehicle_name=self.name).join()
-            c.landAsync(timeout_sec=30, vehicle_name=self.name).join()
+            # The last bit is a steady sink, not a position target: AirSim never counts a target at
+            # ground level as reached, so a moveToZ there left the drone hovering just above it
+            # until the move timed out.
+            deadline = time.time() + height / SINK_SPEED * 2 + MOVE_MARGIN_S
+            while time.time() < deadline:
+                c.moveByVelocityAsync(0, 0, SINK_SPEED, 1, vehicle_name=self.name).join()
+                if c.getMultirotorState(vehicle_name=self.name).landed_state == airsim.LandedState.Landed:
+                    break  # touched down
+            c.landAsync(timeout_sec=10, vehicle_name=self.name).join()
             height = self.height_above_ground()
         if height is not None and height > LANDED_HEIGHT_M:
             self.log(f"WARNING: still {height:.1f} m above the ground")
