@@ -83,7 +83,7 @@ def test_lanes_cover_area_across_with_overlap():
 
 
 def test_lanes_are_shifted_back_so_the_band_covers_the_area_edges():
-    c = cfg(area__corner_a=[0, 0], area__corner_b=[300, 60])
+    c = cfg(area__corner_a=[0, 0], area__corner_b=[300, 60], search__lane_axis="x")
     plan = plan_survey(c)
     assert plan.lane_axis == "x"
     near = plan.band.near_m
