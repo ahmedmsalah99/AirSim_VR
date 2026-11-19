@@ -48,6 +48,7 @@ class ViewBand:
     person_px_near: float
     person_px_far: float
     far_limited_by: str  # "detector pixels" or "image edge"
+    lane_swath_m: float = 0.0  # width covered at the near edge: what lanes are spaced by
 
 
 @dataclass
@@ -137,10 +138,15 @@ def view_band(altitude, tilt_deg, cam, det):
     def person_px(a):
         return det["person_size_m"] * focal_px(cam) * detector_scale(cam, det) * math.sin(a) / altitude
 
-    # Ground width covered at the far edge: depth along the optical axis times the horizontal FOV.
-    depth = altitude / math.sin(a_far) * math.cos(a_far - tilt)
-    swath = 2 * depth * math.tan(math.radians(cam["hfov_deg"]) / 2)
-    return ViewBand(ahead(a_near), ahead(a_far), swath, person_px(a_near), person_px(a_far), limited_by)
+    # Ground width covered by a ray at angle a: depth along the optical axis times the horizontal FOV.
+    def width(a):
+        return 2 * altitude / math.sin(a) * math.cos(a - tilt) * math.tan(math.radians(cam["hfov_deg"]) / 2)
+
+    # Lanes are spaced by the width at the near edge, the narrowest: every point between the lanes
+    # then crosses the whole band. Spaced by the far edge's width, a point out at its sides was only
+    # seen at the far end, where people are smallest, and in the fewest frames.
+    return ViewBand(ahead(a_near), ahead(a_far), width(a_far), person_px(a_near), person_px(a_far), limited_by,
+                    width(min(a_near, math.pi / 2)))
 
 
 def plan_survey(cfg):
@@ -189,7 +195,7 @@ def plan_at_altitude(cfg, altitude):
         "frames per person": (band.far_m - band.near_m) * frame_rate / search["min_frames_per_point"],
     }
     speed = min(speed_limits.values())
-    max_spacing = band.swath_m * (1 - search["side_overlap"])
+    max_spacing = band.lane_swath_m * (1 - search["side_overlap"])
 
     # Lanes along the axis set in the config, or ("auto") whichever gives the shorter mission.
     fixed = search.get("lane_axis", "auto")
@@ -213,7 +219,8 @@ def plan_at_altitude(cfg, altitude):
 
 
 def _lanes(area, axis, band, max_spacing):
-    """Lanes parallel to `axis`, spread evenly across the area, alternating direction.
+    """Lanes parallel to `axis`, spread evenly across the area (by the swath at the near edge of
+    the band), alternating direction.
 
     The camera sees band.near_m..band.far_m ahead, so each lane is shifted back by
     near_m: at its start the near edge of the band is on the area's edge, and at its
@@ -223,7 +230,7 @@ def _lanes(area, axis, band, max_spacing):
     x0, x1, y0, y1 = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
     lo, hi, start, end = (y0, y1, x0, x1) if axis == "x" else (x0, x1, y0, y1)
 
-    width, swath = hi - lo, band.swath_m
+    width, swath = hi - lo, band.lane_swath_m
     if width <= swath:
         offsets, spacing = [(lo + hi) / 2], 0.0
     else:
@@ -255,7 +262,7 @@ def format_plan(plan):
   camera tilt       {plan.tilt_deg:6.1f} deg below the horizon, looking along the lane
   detection band    {b.near_m:6.1f} to {b.far_m:.1f} m ahead (far edge set by {b.far_limited_by})
   person size       {b.person_px_near:6.1f} px at the near edge, {b.person_px_far:.1f} px at the far edge
-  swath             {b.swath_m:6.1f} m wide at the far edge
+  swath             {b.lane_swath_m:6.1f} m wide at the near edge (lanes are spaced by it), {b.swath_m:.1f} m at the far edge
   lanes             {plan.lane_count} lanes along {plan.lane_axis}, {plan.lane_spacing:.1f} m apart
   speed             {plan.speed:6.1f} m/s  (limited by {plan.speed_reason})
 {limits}

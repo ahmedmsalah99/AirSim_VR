@@ -75,11 +75,11 @@ def test_lanes_cover_area_across_with_overlap():
     across = 1 if plan.lane_axis == "x" else 0
     offsets = sorted(lane.start[across] for lane in plan.lanes)
     lo, hi = (10, 95) if plan.lane_axis == "x" else (-37, 81)
-    half = plan.band.swath_m / 2
+    half = plan.band.lane_swath_m / 2
     assert offsets[0] - half == pytest.approx(lo)
     assert offsets[-1] + half == pytest.approx(hi)
     for a, b in zip(offsets, offsets[1:]):
-        assert b - a <= plan.band.swath_m * (1 - c["search"]["side_overlap"]) + 1e-9
+        assert b - a <= plan.band.lane_swath_m * (1 - c["search"]["side_overlap"]) + 1e-9
 
 
 def test_lanes_are_shifted_back_so_the_band_covers_the_area_edges():
@@ -120,3 +120,12 @@ def test_fixed_lane_axis_gives_more_shorter_lanes_across_a_wide_area():
 def test_bad_lane_axis_is_rejected():
     with pytest.raises(InfeasiblePlan):
         plan_survey(cfg(search__lane_axis="z"))
+
+
+def test_lanes_are_spaced_by_the_near_edge_swath():
+    c = cfg(camera__tilt_deg=45)
+    band = view_band(20, 45, c["camera"], c["detector"])
+    a_near = math.atan2(20, band.near_m)
+    depth = 20 / math.sin(a_near) * math.cos(a_near - math.radians(45))
+    assert band.lane_swath_m == pytest.approx(2 * depth * math.tan(math.radians(30)))
+    assert band.lane_swath_m < band.swath_m  # narrower than at the far edge
