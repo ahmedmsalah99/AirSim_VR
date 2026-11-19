@@ -53,8 +53,8 @@ search:
 
 confirm:
   min_person_px: 40             # approach and zoom until a person is this big
-  min_altitude: 12              # never descend below this while confirming; trees here reach
-                                #   ~15 m, so lower risks collisions near them
+  min_altitude: 17              # never descend below this while confirming: the tree tops here
+                                #   reach ~15 m (at 12 m the drone clipped them)
   min_fov_deg: 10               # the camera can zoom in to this horizontal field of view
   speed: 1.5                    # along the line of sight, down and back up
   use_depth: false              # measure a confirmed person with the depth camera (slow in AirSim)
