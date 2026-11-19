@@ -6,6 +6,7 @@ The drone searches a rectangle in a lawnmower pattern with its camera tilted for
 |---|---|
 | `config.yaml` | Search area, drone limits, camera, detector, confirmation and publishing settings |
 | `mission.py` | The mission: search, confirm, publish, resume, return home, report |
+| `set_area.py` | Sets the search area from two corner markers placed in the level |
 | `survey_plan.py` | Computes altitude, detection band, lane spacing, speed and lanes, and explains each choice |
 | `camera_geometry.py` | Pixel ↔ ground geometry, and the line-of-sight confirm point |
 | `drone_camera.py` | The drone camera in AirSim: tilt it, grab frames with depth, locate pixels |
@@ -32,7 +33,7 @@ Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). 
 
 ## Use
 
-1. Set the search rectangle in `config.yaml`. Positions are metres from the PlayerStart: `x = (Unreal X - PlayerStart X) / 100`, and the same for `y`. Read the Unreal X/Y off actors in the editor. Also set `max_obstacle_height` to the tallest building or tree inside the rectangle.
+1. Set the search rectangle. Easiest: in the editor drag two **Target Points** (Place Actors) onto opposite corners of the area, tag them `Area_A` and `Area_B` (Details → Actor → Tags), press Play and run `python set_area.py`. It writes the corners into `config.yaml`, runs the lanes along the long side, and prints the plan. Or set it in `config.yaml` by hand. Positions are metres from the PlayerStart: `x = (Unreal X - PlayerStart X) / 100`, and the same for `y`. Read the Unreal X/Y off actors in the editor. Also set `max_obstacle_height` to the tallest building or tree inside the rectangle.
 2. Check the plan without flying:
    ```
    python survey_plan.py
