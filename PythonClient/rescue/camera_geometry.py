@@ -71,3 +71,13 @@ def confirm_viewpoint(drone, target, distance, lowest_z):
         # Too low: stop on the line where it reaches the lowest allowed height.
         s = min(r, (lowest_z - target[2]) / unit[2]) if unit[2] < 0 else r
     return np.asarray(target, float) + unit * s, bearing_deg(drone, target), tilt
+
+
+def arc_point(target, start, angle_deg):
+    """start rotated angle_deg about the vertical through target (positive = clockwise from above,
+    i.e. north towards east): same horizontal distance from the target, same height."""
+    a = math.radians(angle_deg)
+    dx, dy = start[0] - target[0], start[1] - target[1]
+    return np.array([target[0] + dx * math.cos(a) - dy * math.sin(a),
+                     target[1] + dx * math.sin(a) + dy * math.cos(a),
+                     start[2]])
