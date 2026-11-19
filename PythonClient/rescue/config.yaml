@@ -15,7 +15,7 @@ drone:
   name: Drone1
   port: 41451
   spawn_ned: [0, 4, -5]         # must match Vehicles.Drone1 X, Y, Z in settings.json
-  max_speed: 5                  # faster overshoots the lane ends
+  max_speed: 8                  # search speed cap; the measured frame rate can lower it
   climb_speed: 3
   transit_speed: 8
   turn_time_s: 3                # stopping, turning and accelerating at each lane end
