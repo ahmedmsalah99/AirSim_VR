@@ -48,7 +48,8 @@ detector:
 search:
   safety_margin: 5              # above the tallest obstacle
   min_altitude: 10
-  max_altitude: 25
+  max_altitude: 20              # = the lowest safe altitude: people look biggest there (higher, the
+                                #   planner would trade lanes for height)
   side_overlap: 0.2             # overlap between neighbouring lanes
   lane_axis: y                  # lanes run along x or y; auto = whichever gives the shorter mission
   max_blur_px: 1.0              # motion blur allowed during one exposure
