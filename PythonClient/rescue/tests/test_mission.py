@@ -490,3 +490,14 @@ def test_unknown_victim_tag_aborts_and_lands(mission):
     with pytest.raises(RuntimeError, match="Nobody"):
         m.run()
     assert m.client.pos[2] == pytest.approx(GROUND_Z)
+
+
+def test_short_moves_slow_down_so_airsim_doesnt_end_them_at_once(mission):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=False)
+    start = m.client.pos.copy()
+    m.goto(start + np.array([3.6, 0, 0]), 8, heading=0)
+    assert m.client.moves[-1][1] == pytest.approx(3.0)       # lookahead 0.6 * 3 = 1.8 m, inside the move
+    m.goto(m.client.pos + np.array([50, 0, 0]), 8, heading=0)
+    assert m.client.moves[-1][1] == 8                         # long moves keep their speed
