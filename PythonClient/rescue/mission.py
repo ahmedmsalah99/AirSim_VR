@@ -46,6 +46,7 @@ from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_p
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
 LANDED_HEIGHT_M = 0.5
+MIN_SEARCH_SPEED = 0.3  # m/s; slower than this the search would never finish
 REPORT_EVERY_S = 5  # how often the search logs what it has been detecting
 STILL_SPEED = 0.3   # m/s
 MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
@@ -86,6 +87,7 @@ class Mission:
         self.candidates = []
         self.events = []
         self.t0 = time.time()
+        self.speed = plan.speed
         self.scans = {"frames": 0, "people": 0}
         self.image_dir = OUTPUT_DIR / f"mission_{time.strftime('%Y%m%d_%H%M%S')}"
 
@@ -154,8 +156,10 @@ class Mission:
                 self.log(f"to the start of lane {i + 1}/{plan.lane_count}")
                 self.goto(self.at_altitude(lane.start), self.cfg["drone"]["transit_speed"], lane.heading_deg,
                           what=f"transit to lane {i + 1}")
-                self.log(f"lane {i + 1}/{plan.lane_count} at {plan.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")
-                self.sweep(self.at_altitude(lane.end), plan.speed, lane.heading_deg)
+                if i == 0:
+                    self.speed = self.speed_for_frame_rate()
+                self.log(f"lane {i + 1}/{plan.lane_count} at {self.speed:.1f} m/s, heading {lane.heading_deg:.0f} deg")
+                self.sweep(self.at_altitude(lane.end), self.speed, lane.heading_deg)
 
             self.log("search complete")
             self.return_and_land()
@@ -241,6 +245,35 @@ class Mission:
             self.log("stopped again: landing here")
             c.cancelLastTask(self.name)
             self.land()
+
+    def frame_rate(self, frames=3):
+        """Search frames per second actually achieved: capture plus detection, timed."""
+        self.camera.grab()  # the first frame includes one-off setup
+        start = time.time()
+        for _ in range(frames):
+            self.detector.detect(self.camera.grab().image)
+        return frames / max(time.time() - start, 1e-6)
+
+    def speed_for_frame_rate(self):
+        """The planned speed, or slower if frames come too slowly for it.
+
+        A ground point stays in the detection band for (far - near) / v seconds and has to be
+        in min_frames_per_point frames. The plan assumes detector.fps_per_tile; if capture and
+        detection are slower in practice (e.g. Unreal throttled in the background), people
+        would pass between frames unseen.
+        """
+        if self.detector is None:
+            return self.plan.speed
+        fps = self.frame_rate()
+        band = self.plan.band.far_m - self.plan.band.near_m
+        limit = band * fps / self.cfg["search"]["min_frames_per_point"]
+        self.log(f"search frames: {fps:.1f} per second")
+        if limit >= self.plan.speed:
+            return self.plan.speed
+        self.log(f"WARNING: too slow for {self.plan.speed:.1f} m/s; searching at {limit:.1f} m/s so every point "
+                 f"is in {self.cfg['search']['min_frames_per_point']} frames. If Unreal isn't the active window, "
+                 f"turn off Edit > Editor Preferences > Performance > 'Use Less CPU when in Background'")
+        return max(limit, MIN_SEARCH_SPEED)
 
     def at_altitude(self, xy_world):
         x, y = self.to_local(xy_world)
@@ -465,7 +498,7 @@ class Mission:
         out = OUTPUT_DIR / f"mission_{time.strftime('%Y%m%d_%H%M%S')}.json"
         out.write_text(json.dumps({
             "plan": {"altitude": self.plan.altitude, "tilt_deg": self.plan.tilt_deg,
-                     "lanes": self.plan.lane_count, "speed": self.plan.speed},
+                     "lanes": self.plan.lane_count, "speed": self.speed},
             "victims": rows,
             "candidates": [{"id": c.id, "status": c.status, "hits": c.hits, "frames": c.frames,
                             "seen_at": [round(v, 2) for v in self.to_world(c.seen_at)]} for c in self.candidates],

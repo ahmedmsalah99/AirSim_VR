@@ -367,3 +367,27 @@ def test_search_logs_detections_and_why_they_were_dropped(mission, capsys):
     out = capsys.readouterr().out
     assert "person detection(s) (dropped:" in out and "outside the area" in out
     assert not m.candidates
+
+
+def test_search_slows_down_when_frames_are_slow(mission, capsys, monkeypatch):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    plan = plan_survey(cfg)
+    monkeypatch.setattr(mod.Mission, "frame_rate", lambda self, frames=3: 0.2)  # one frame every 5 s
+    m = mod.Mission(cfg, plan, detect=True)
+    m.run()
+    band = plan.band.far_m - plan.band.near_m
+    expected = band * 0.2 / cfg["search"]["min_frames_per_point"]
+    assert expected < plan.speed
+    assert m.speed == pytest.approx(expected)
+    assert {v for _, v in m.client.moves if abs(v - expected) < 1e-9}       # the lanes were flown at it
+    assert "Use Less CPU when in Background" in capsys.readouterr().out
+
+
+def test_fast_frames_keep_the_planned_speed(mission):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    plan = plan_survey(cfg)
+    m = mod.Mission(cfg, plan, detect=True)
+    m.run()
+    assert m.speed == plan.speed

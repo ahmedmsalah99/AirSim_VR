@@ -24,6 +24,8 @@ pip install msgpack-rpc-python numpy pyyaml onnxruntime opencv-python pyzmq
 
 Copy the repo's `settings.json` to `<Documents>\AirSim` (see the top-level README). Its `CameraDefaults` give every camera, including the drone's `bottom_center`, 1280×720 images with a 60° field of view, which the plan assumes. Don't configure cameras under `Vehicles` → `Cameras`: in this AirSim version that spawns a new camera actor and crashes on Play. The settings also spawn the drone 4 m east of the Husky so it doesn't land on it.
 
+**Turn off Unreal's background throttling:** Edit → Editor Preferences → General → Performance → untick **Use Less CPU when in Background**. While you're in the terminal, the editor otherwise drops to a few frames per second, every camera image waits for a frame, and the search gets a frame every several seconds, so people pass between frames unseen. `mission.py` measures the frame rate before the first lane and slows down if it's too low for the planned speed (and says so). On a slow machine, Settings → Engine Scalability Settings → Medium helps too.
+
 Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). Tag the people placed in the level `Victim_01`, `Victim_02`, … (Details → Actor → Tags) and list the tags under `ground_truth` in `config.yaml`, so the mission can report its position error.
 
 ## Use
