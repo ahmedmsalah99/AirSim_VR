@@ -68,6 +68,7 @@ class FakeClient:
 
 class FakeCamera:
     def __init__(self, client, airsim, cfg):
+        self.client = client
         self.tilts = []
         self.fovs = []
         self.depth_grabs = 0
@@ -75,6 +76,9 @@ class FakeCamera:
     def set_tilt(self, tilt):
         self.tilts.append(tilt)
         return True
+
+    def center_depth(self):
+        return GROUND_Z - self.client.pos[2]  # looking straight down from the fake drone
 
     def set_fov(self, fov):
         self.fovs.append(fov)
@@ -192,9 +196,10 @@ def test_person_is_confirmed_published_once_and_the_lane_resumes(mission):
     assert GROUND_Z - approach[2] >= cfg["confirm"]["min_altitude"] - 1e-9   # never below min_altitude
 
     tilts = m.camera.tilts
-    assert tilts[0] == plan.tilt_deg and tilts[-1] == 89.5
-    los = tilts[1]
-    assert los != plan.tilt_deg and tilts[2] == plan.tilt_deg               # line of sight, then restored
+    assert tilts[:2] == [89.5, plan.tilt_deg]          # straight down to measure the ground, then search
+    los = tilts[2]
+    assert los != plan.tilt_deg and tilts[3] == plan.tilt_deg  # line of sight, then restored
+    assert tilts[-1] == 89.5
     assert m.client.pos == pytest.approx([SPAWN[0] * 0, 0, GROUND_Z])       # landed back at home
     assert m.client.markers == [mod.CONFIRMED_COLOR]  # nothing drawn on the person before it's decided
 
@@ -317,4 +322,48 @@ def test_landing_is_checked_and_finished(mission, capsys):
     out = capsys.readouterr().out
     assert "descending the rest" in out
     assert m.client.pos[2] == pytest.approx(GROUND_Z)
-    assert "landed (0.0 m above the take-off ground)" in out
+    assert "landed (0.0 m above the ground)" in out
+
+
+class HeldInTheAir(FakeClient):
+    """The drone starts 5 m above the ground, held at its spawn height."""
+
+    def __init__(self, port):
+        super().__init__(port)
+        self.pos = np.array([0.0, 0.0, GROUND_Z - 5])
+
+    def landAsync(self, **kw):
+        if self.pos[2] < GROUND_Z - 5 - 0.1:     # AirSim's land stops at the height it started from
+            return Future(self, (self.pos[0], self.pos[1], GROUND_Z - 5))
+        return Future(self)
+
+
+def test_ground_is_measured_not_assumed(mission, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    mod.airsim.MultirotorClient = HeldInTheAir
+    try:
+        plan = plan_survey(cfg)
+        m = mod.Mission(cfg, plan, detect=False)
+        m.run()
+    finally:
+        mod.airsim.MultirotorClient = FakeClient
+    out = capsys.readouterr().out
+    assert "ground is 5.0 m below the drone" in out
+    assert m.ground_z == pytest.approx(GROUND_Z)
+    lane_z = {round(p[2], 6) for p, v in m.client.moves if v == plan.speed}
+    assert lane_z == {round(GROUND_Z - plan.altitude, 6)}       # searched at the planned height above the real ground
+    assert "descending the rest" in out
+    assert m.client.pos[2] == pytest.approx(GROUND_Z)          # landed on the real ground
+
+
+def test_search_logs_detections_and_why_they_were_dropped(mission, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    cfg["area"]["corner_a"], cfg["area"]["corner_b"] = [100, 100], [150, 150]  # the person is outside it
+    mod.REPORT_EVERY_S = 0
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True)
+    m.run()
+    out = capsys.readouterr().out
+    assert "person detection(s) (dropped:" in out and "outside the area" in out
+    assert not m.candidates
