@@ -45,6 +45,8 @@ from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_p
 
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
+LANDED_HEIGHT_M = 0.5
+STILL_SPEED = 0.3   # m/s
 MOVE_MARGIN_S = 15  # extra time a move gets beyond distance / speed before it's given up
 LANE_COLOR = [0.0, 1.0, 0.2, 1.0]
 AREA_COLOR = [1.0, 0.6, 0.0, 1.0]
@@ -83,6 +85,7 @@ class Mission:
         self.candidates = []
         self.events = []
         self.t0 = time.time()
+        self.image_dir = OUTPUT_DIR / f"mission_{time.strftime('%Y%m%d_%H%M%S')}"
 
     # ---- bookkeeping -------------------------------------------------------------------
 
@@ -171,9 +174,43 @@ class Mission:
         self.land()
 
     def land(self):
-        self.client.landAsync(timeout_sec=60, vehicle_name=self.name).join()
-        self.client.armDisarm(False, self.name)
-        self.log("landed")
+        """Land, and check it: landAsync can return with the drone still in the air."""
+        c = self.client
+        c.landAsync(timeout_sec=60, vehicle_name=self.name).join()
+        height = self.ground_z - self.position()[2]
+        if height > LANDED_HEIGHT_M:
+            self.log(f"land returned {height:.1f} m above the ground; descending the rest")
+            c.moveToZAsync(self.ground_z, 1, timeout_sec=height + MOVE_MARGIN_S, vehicle_name=self.name).join()
+            c.landAsync(timeout_sec=30, vehicle_name=self.name).join()
+            height = self.ground_z - self.position()[2]
+        if height > LANDED_HEIGHT_M:
+            self.log(f"WARNING: still {height:.1f} m above the take-off ground (on something?)")
+        c.armDisarm(False, self.name)
+        self.log(f"landed ({max(height, 0):.1f} m above the take-off ground)")
+
+    def wait_until_still(self, timeout_s=6):
+        """Hover until the drone has stopped moving, so frames aren't taken mid-sway."""
+        self.client.hoverAsync(vehicle_name=self.name).join()
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            v = self.client.getMultirotorState(vehicle_name=self.name).kinematics_estimated.linear_velocity
+            if math.hypot(v.x_val, v.y_val, v.z_val) < STILL_SPEED:
+                return True
+            time.sleep(0.2)
+        self.log("WARNING: still moving after hovering; taking the frames anyway")
+        return False
+
+    def save(self, name, frame, detections):
+        """Save a frame with its boxes for inspection; never let that stop the flight."""
+        if not self.cfg["confirm"].get("save_images", True):
+            return
+        try:
+            import cv2
+            from detector import draw
+            self.image_dir.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(self.image_dir / f"{name}.jpg"), draw(frame.image, detections))
+        except Exception as e:
+            self.log(f"WARNING: couldn't save {name}: {e!r}")
 
     def abort(self):
         """Stopped early: fly home at the current altitude and land there (not into whatever is
@@ -243,6 +280,7 @@ class Mission:
             self.candidates.append(cand)
             w = self.to_world(feet)
             self.log(f"candidate {cand.id} at x={w[0]:.1f} y={w[1]:.1f} (confidence {det.confidence:.2f})")
+            self.save(f"candidate{cand.id}_search", frame, [det])
             return cand
         return None
 
@@ -283,8 +321,7 @@ class Mission:
             self.goto(point, conf["speed"], heading, what="approach")
         if fov < cam["hfov_deg"]:
             self.camera.set_fov(fov)
-        c.hoverAsync(vehicle_name=self.name).join()
-        time.sleep(1)  # settle so frames aren't tilted
+        self.wait_until_still()
 
         # Hit or miss per frame from the scene image and the flat-ground projection: fast.
         # Float depth images are very slow through AirSim's Python client, so depth is optional
@@ -293,6 +330,7 @@ class Mission:
         for i in range(conf["frames"]):
             frame = self.camera.grab()
             dets = self.detector.detect(frame.image)
+            self.save(f"candidate{cand.id}_confirm{i + 1}", frame, dets)
             hit = None
             for d in dets:
                 p = self.camera.ground_point(frame, d.center[0], d.y2, self.ground_z)

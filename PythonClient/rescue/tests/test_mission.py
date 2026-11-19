@@ -37,8 +37,10 @@ class FakeClient:
             n = np.linalg.norm(step)
             self.pos = self.moving.copy() if n < 2 else self.pos + step / n * 2
         p = types.SimpleNamespace(x_val=self.pos[0], y_val=self.pos[1], z_val=self.pos[2])
+        v = types.SimpleNamespace(x_val=0.0, y_val=0.0, z_val=0.0)
         landed = 0 if self.pos[2] >= GROUND_Z - 0.1 else 1
-        return types.SimpleNamespace(landed_state=landed, kinematics_estimated=types.SimpleNamespace(position=p))
+        return types.SimpleNamespace(landed_state=landed,
+                                     kinematics_estimated=types.SimpleNamespace(position=p, linear_velocity=v))
 
     def moveToPositionAsync(self, x, y, z, v, **kw):
         self.moves.append((np.array([x, y, z]), v))
@@ -136,6 +138,7 @@ def mission(monkeypatch, tmp_path):
     PUBLISHED.clear()
     from survey_plan import load_config
     cfg = load_config()
+    cfg["confirm"]["save_images"] = False
     SPAWN = np.array(cfg["drone"]["spawn_ned"], float)
     return mission, cfg
 
@@ -288,3 +291,30 @@ def test_second_ctrl_c_lands_where_it_is(mission, capsys):
     assert "stopped again: landing here" in out and "landed" in out
     assert m.client.pos[:2] == pytest.approx(m.client.stopped_at[:2])  # landed where it was stopped
     assert m.client.pos[2] == pytest.approx(GROUND_Z)
+
+
+class StuckLanding(FakeClient):
+    """landAsync returns at once the first time, leaving the drone in the air."""
+
+    def __init__(self, port):
+        super().__init__(port)
+        self.lands = 0
+
+    def landAsync(self, **kw):
+        self.lands += 1
+        return Future(self) if self.lands == 1 else super().landAsync(**kw)
+
+
+def test_landing_is_checked_and_finished(mission, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    mod.airsim.MultirotorClient = StuckLanding
+    try:
+        m = mod.Mission(cfg, plan_survey(cfg), detect=False)
+        m.run()
+    finally:
+        mod.airsim.MultirotorClient = FakeClient
+    out = capsys.readouterr().out
+    assert "descending the rest" in out
+    assert m.client.pos[2] == pytest.approx(GROUND_Z)
+    assert "landed (0.0 m above the take-off ground)" in out

@@ -54,11 +54,12 @@ confirm:
   min_altitude: 12              # never descend below this while confirming; trees here reach
                                 #   ~15 m, so lower risks collisions near them
   min_fov_deg: 10               # the camera can zoom in to this horizontal field of view
-  speed: 2                      # along the line of sight, down and back up
+  speed: 1.5                    # along the line of sight, down and back up
   use_depth: false              # measure a confirmed person with the depth camera (slow in AirSim)
   frames: 8                     # N frames are checked at the confirm point ...
   required: 5                   #   ... and the person must be found in k of them
-  frame_interval_s: 0.3
+  frame_interval_s: 0.6
+  save_images: true             # save each candidate's search frame and confirm frames to output/
   match_radius: 3.0             # a detection this close to the candidate counts as a hit
   merge_radius: 6.0             # a new detection this close to a known one is the same person
 
