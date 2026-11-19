@@ -465,3 +465,28 @@ def test_weak_detections_dont_start_a_confirmation(mission, monkeypatch, capsys)
     m.run()
     assert not m.candidates and not PUBLISHED
     assert "below 0.4 confidence" in capsys.readouterr().out
+
+
+def test_one_victim_is_viewed_from_the_search_band_confirmed_and_landed(mission, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    plan = plan_survey(cfg)
+    m = mod.Mission(cfg, plan, detect=True, victim="Victim_01")
+    m.run()
+
+    assert len(PUBLISHED) == 1
+    view = m.client.moves[0][0]  # first move: to the search view, no lanes flown
+    ahead = (plan.band.near_m + plan.band.far_m) / 2
+    assert np.linalg.norm(view[:2] - PERSON[:2]) == pytest.approx(ahead)
+    assert view[2] == pytest.approx(GROUND_Z - plan.altitude)
+    assert "lane 1/" not in capsys.readouterr().out
+    assert m.client.pos == pytest.approx([0, 0, GROUND_Z])  # landed back at home
+
+
+def test_unknown_victim_tag_aborts_and_lands(mission):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    m = mod.Mission(cfg, plan_survey(cfg), detect=True, victim="Nobody")
+    with pytest.raises(RuntimeError, match="Nobody"):
+        m.run()
+    assert m.client.pos[2] == pytest.approx(GROUND_Z)

@@ -45,7 +45,9 @@ Put the converted model at `models/person_yolo11s.onnx` (see `export_onnx.py`). 
    ```
    python mission.py               # search, confirm, publish
    python mission.py --no-detect   # only fly the search pattern
+   python mission.py --victim Victim_01   # test one person, no lanes
    ```
+   `--victim` flies straight to where a lane would see that tagged person (mid detection band, at the search altitude and tilt, facing them), looks until they're detected (up to 10 frames), confirms them exactly as the search does, then flies home and lands.
    The area (orange) and the lanes (green) are drawn in the scene; confirmed victims are marked green and rejected candidates red, a few metres above the spot. Candidates aren't marked before they're decided: the camera sees debug drawings, and a marker on a person would hide them. Ctrl+C (or an error) ends the mission early: the drone reconnects (a Ctrl+C mid-call breaks AirSim's client), flies home at its current altitude and lands; a second Ctrl+C lands it where it is. Before taking off it measures the ground below with the depth camera (`ground is … m below the drone`); every height, every person's ground position and the landing are relative to it. During the lanes it logs every 5 s how many people it detected and how many it dropped and why. At the end it lands (checking that it's really down) and prints each victim's position and its error against the tagged people. It saves a summary (`output/mission_<time>.json`) and, for every candidate, the search frame that triggered it and each confirm frame with the detections drawn (`output/mission_<time>/candidate<N>_*.jpg`; `confirm.save_images`).
    The window at the bottom of the viewport shows the drone's camera; press `1` in the viewport to hide or show it.
 
