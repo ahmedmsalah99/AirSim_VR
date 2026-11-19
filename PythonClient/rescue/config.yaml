@@ -32,7 +32,7 @@ camera:
 detector:
   model: models/person_yolo11s.onnx  # relative to this folder
   person_class: 0
-  device: auto                  # auto = CUDA, else DirectML GPU 1, else GPU 0, else the CPU;
+  device: dml:1                  # auto = CUDA, else DirectML GPU 1, else GPU 0, else the CPU;
                                 #   or cpu, cuda, dml:0, dml:1 ... (DirectML GPU number). On a laptop
                                 #   GPU 0 is the integrated one that draws the screen: don't use it
   conf_threshold: 0.25
