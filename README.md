@@ -64,12 +64,39 @@ Close the Unreal editor first.
    python %USERPROFILE%\Projects\AirSim_VR\PythonClient\both\multi_agent_drone_car.py
    ```
 
+## Drone rescue mission
+
+`PythonClient/rescue` is the drone's search-and-rescue mission, in Python only (no PX4 or ROS):
+
+1. The drone flies a lawnmower search over a rectangle with its camera tilted 45° forward.
+2. A YOLO11 person detector runs on the GPU.
+3. When someone is seen in 3 frames, the drone flies down the line of sight, zooms in and checks them from up to 3 viewpoints.
+4. Confirmed victims are published over ZeroMQ.
+5. The drone goes back to where it stopped and carries on, then flies home and lands.
+
+Quick start, with Play running:
+```
+cd %USERPROFILE%\Projects\AirSim_VR\PythonClient\rescue
+pip install msgpack-rpc-python numpy pyyaml onnxruntime-directml opencv-python pyzmq
+python survey_plan.py                  # print the search plan without flying
+python mission.py                      # the full mission
+python mission.py --victim Victim_01   # test one tagged person, no lanes
+python listen_victims.py               # (another terminal) print the published victims
+```
+The detector model goes in `PythonClient/rescue/models/person_yolo11s.onnx`. The search area, speeds and thresholds are in `PythonClient/rescue/config.yaml`. To fit the area to a new map, use `set_area.py`. **[`PythonClient/rescue/README.md`](PythonClient/rescue/README.md)** has the full setup and explains how the plan, detection and confirmation work.
+
 ## Troubleshooting
 
 - **`WSAECONNREFUSED` from Python:** nothing is listening on the ports. Check that Play is running, then run `netstat -ano | findstr 4145`; you should see both 41451 and 41452. If they're missing, AirSim failed to start. Look for a popup in Unreal or red lines in **Window → Developer Tools → Output Log**. Common causes:
   - `settings.json` is missing from `<Documents>\AirSim`, or doesn't have `"SimMode": "Both"`.
   - The plugin wasn't rebuilt after a C++ change.
 - **The car is the SUV instead of the Husky, or settings changes have no effect:** AirSim is reading a different `settings.json`. Usually it's in the OneDrive Documents folder while you edited `%USERPROFILE%\Documents`. Copy it again with the command from first-time setup, step 1. AirSim's own messages (such as "Loaded settings from …") only show briefly on screen after Play; they're not in the Output Log.
+- **The mission flies very slowly (`search frames: 0.2 per second`):** the line above it says which step is slow. If **capture** is slow (several seconds), the plugin is older than the image-capture fix on `rescue-dev`, so do a full build. If **detection** is slow, YOLO is on the CPU. Install `onnxruntime-directml` instead of `onnxruntime`. On a laptop, check that the log says `detector on DirectML GPU 1`. GPU 0 is the integrated GPU that drives the screen, and using it froze the machine.
+- **The Unreal editor crashes or freezes with no error during a mission:** older builds of the `Both` mode updated the car from two threads at once. That's fixed on `rescue-dev`, so do a full build. To catch the next crash, run these once in an **administrator** cmd. Windows then saves a dump to `C:\CrashDumps`, which you can open in Visual Studio with **Debug with Native Only** to see the call stack:
+  ```
+  reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UE4Editor.exe" /v DumpFolder /t REG_EXPAND_SZ /d "C:\CrashDumps" /f
+  reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UE4Editor.exe" /v DumpType /t REG_DWORD /d 1 /f
+  ```
 - **`MSB8020 ... v141 cannot be found`:** `build.cmd` was changed to force the VS 2017 toolset. Keep it on the default VS 2019 toolset.
 - **"Failed to generate project files ... UnrealBuildTool.exe":** `Unreal/Environments/Blocks/GenerateProjectFiles.bat` must be the version that calls the engine's UnrealBuildTool directly, as on `rescue-dev`, not the one that goes through `UnrealVersionSelector`.
 
