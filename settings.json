@@ -28,7 +28,24 @@
       "PawnPath": "DefaultCar",
       "X": 0,
       "Y": 0,
-      "Z": -2
+      "Z": -2,
+      "Sensors": {
+        "Lidar1": {
+          "SensorType": 6,
+          "Enabled": true,
+          "NumberOfChannels": 16,
+          "Range": 30,
+          "RotationsPerSecond": 60,
+          "PointsPerSecond": 300000,
+          "VerticalFOVUpper": 10,
+          "VerticalFOVLower": -10,
+          "X": 0,
+          "Y": 0,
+          "Z": -1,
+          "DrawDebugPoints": false,
+          "DataFrame": "VehicleInertialFrame"
+        }
+      }
     },
     "Drone1": {
       "VehicleType": "SimpleFlight",

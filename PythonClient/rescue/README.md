@@ -7,6 +7,8 @@ The drone searches a rectangle in a lawnmower pattern with its camera tilted for
 | `config.yaml` | Search area, drone limits, camera, detector, confirmation and publishing settings |
 | `mission.py` | The mission: search, confirm, publish, resume, return home, report |
 | `set_area.py` | Sets the search area from two corner markers placed in the level |
+| `ugv.py` | The Husky UGV: drives a medical kit to each confirmed victim, mapping with its lidar as it goes |
+| `occupancy_grid.py` | The UGV's lidar occupancy grid and A* path planner |
 | `survey_plan.py` | Computes altitude, detection band, lane spacing, speed and lanes, and explains each choice |
 | `camera_geometry.py` | Pixel ↔ ground geometry, and the line-of-sight confirm point |
 | `drone_camera.py` | The drone camera in AirSim: tilt it, grab frames with depth, locate pixels |
@@ -73,6 +75,32 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
 4. **Check, then arc:** it hovers until it has stopped moving and runs the detector on `frames` frames, `frame_interval_s` apart. A frame is a hit if a person is detected within `match_radius` of the candidate (feet projected onto the flat ground). If fewer than `required` frames hit, something may be in the way (a pole, a branch), so it flies **along an arc around the person**, at the same distance and height and still facing them, to the next angle in `arc_offsets_deg` (30° to one side, then 30° to the other, in `arc_step_deg` steps) and looks again. The camera tilt stays right on the arc, since the line-of-sight angle doesn't change.
 5. **Decision:** as soon as one viewpoint has at least `required` hits, the person is confirmed: the median of the hits' positions is published (with their spread as the covariance) and marked green. If no viewpoint does, the candidate is rejected and marked red. With `use_depth: true`, one more frame with depth measures the feet directly, with no flat-ground assumption; it's off by default because AirSim's Python client decodes float images very slowly (depth images are 320×180 in `settings.json` to limit that).
 6. **Resume:** it flies back along the arc to the approach point, zooms back out, flies back up the line of sight to where it stopped, restores the camera tilt and heading, and continues the lane.
+
+## The UGV
+
+`ugv.py` drives the Husky (`Car1`) to every victim the drone confirms and leaves a medical kit beside them.
+
+**Setup, once:**
+1. Copy the repo's `settings.json` to `<Documents>\AirSim` again: it gives `Car1` a 16-channel lidar (`Lidar1`, 30 m range, 1 m above the car), and restart Play.
+2. AirSim 1.x can't spawn objects, so the kits are placed in the level in advance and moved when needed. Put a few kit actors (any mesh) somewhere out of sight, e.g. under the map. Set each one's **Mobility** to **Movable**, and tag them `MedKit_1`, `MedKit_2`, ... (Details → Actor → Tags), as listed in `ugv.medkits` in `config.yaml`.
+3. With Play running, and some open ground in front of the Husky:
+   ```
+   python ugv.py --check
+   ```
+   It reads one lidar sweep and prints where the ground comes out. If it's not near 0, change `ugv.base_height_m` by that much. Then it drives for 3 s with the steering at +0.5 and says what `ugv.steering_sign` should be.
+
+**Run:** start the UGV first (ZeroMQ doesn't keep messages for late subscribers), then the drone:
+```
+python ugv.py          # terminal 1: waits at home
+python mission.py      # terminal 2
+```
+What it does:
+1. **Queue:** each confirmed victim is queued. Ids already seen, and anyone within 3 m of a known victim, are ignored. At home it waits; when a victim arrives it drives to the nearest queued one.
+2. **Mapping, with no prior map:** every lidar sweep updates a 2D occupancy grid (`map_resolution_m` cells, log-odds). A point between `obstacle_min_height_m` and `obstacle_max_height_m` above the ground marks its cell occupied, and the cells its ray passed through get freer. Lower points are ground; higher ones are canopy and roofs. The UGV's position comes from AirSim, so this is mapping with a known pose: the map is built only from what the lidar has seen.
+3. **Planning:** A* on the grid, with obstacles grown by `robot_radius_m + safety_margin_m`. Unknown cells count as free, so it heads straight for the goal and goes around what the lidar finds. It replans every `replan_s`, and immediately if something appears across its path. The path is drawn blue in the scene.
+4. **Driving:** pure pursuit. It steers at the point `lookahead_m` along the path, at `max_speed`, and slows to `slow_speed` in sharp turns and near the goal. If it pushes but doesn't move for 3 s, it backs up and replans.
+5. **Kit:** it stops `stop_distance_m` from the victim and moves the next kit to the ground `kit_offset_m` from them, on its side.
+6. **Next:** it drives to the nearest queued victim. With none left it heads home, and a victim published on the way, or while it waits at home, sends it there. A victim it can't reach (no path for `no_path_timeout_s`, or far too long) is skipped and reported.
 
 ## Messages
 

@@ -73,6 +73,7 @@ Close the Unreal editor first.
 3. When someone is seen in 3 frames, the drone flies down the line of sight, zooms in and checks them from up to 3 viewpoints.
 4. Confirmed victims are published over ZeroMQ.
 5. The drone goes back to where it stopped and carries on, then flies home and lands.
+6. The Husky UGV (`ugv.py`) drives to each published victim and leaves a medical kit. It maps obstacles with its lidar as it goes, with no prior map, plans with A*, then serves the next victim or returns home.
 
 Quick start, with Play running:
 ```
@@ -82,6 +83,7 @@ python survey_plan.py                  # print the search plan without flying
 python mission.py                      # the full mission
 python mission.py --victim Victim_01   # test one tagged person, no lanes
 python listen_victims.py               # (another terminal) print the published victims
+python ugv.py                          # (another terminal, start it first) the UGV delivers medical kits
 ```
 The detector model goes in `PythonClient/rescue/models/person_yolo11s.onnx`. The search area, speeds and thresholds are in `PythonClient/rescue/config.yaml`. To fit the area to a new map, use `set_area.py`. **[`PythonClient/rescue/README.md`](PythonClient/rescue/README.md)** has the full setup and explains how the plan, detection and confirmation work.
 

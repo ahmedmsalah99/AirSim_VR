@@ -85,3 +85,29 @@ publish:
 ground_truth:                   # tags of the people placed in the level, to measure position error
   - Victim_01
   - Victim_02
+
+ugv:                            # the Husky (ugv.py)
+  name: Car1
+  port: 41452
+  spawn_ned: [0, 0, -2]         # must match Vehicles.Car1 X, Y, Z in settings.json; home is here
+  lidar: Lidar1                 # Vehicles.Car1.Sensors in settings.json
+  subscribe: tcp://localhost:5556   # where mission.py publishes victims
+  medkits: [MedKit_1, MedKit_2, MedKit_3, MedKit_4]  # tags of kit actors placed in the level (Movable)
+  max_speed: 3.0                # m/s on straight path
+  slow_speed: 1.0               # in turns and near the goal
+  lookahead_m: 2.5              # pure pursuit
+  steering_gain: 1.2            # steering per radian of heading error
+  steering_sign: 1              # -1 if the Husky turns the wrong way
+  robot_radius_m: 0.6
+  safety_margin_m: 0.4          # obstacles are grown by radius + margin
+  stop_distance_m: 2.0          # stop this far from a victim
+  kit_offset_m: 1.0             # the kit goes this far from the victim, on the UGV's side
+  home_radius_m: 1.5
+  base_height_m: 0.3            # the UGV's origin above the ground
+  obstacle_min_height_m: 0.5    # lidar points this high above the ground and up to ...
+  obstacle_max_height_m: 2.5    #   ... this are obstacles; lower is ground, higher is canopy
+  map_size_m: 240               # square map centred on home
+  map_resolution_m: 0.25
+  replan_s: 1.0
+  no_path_timeout_s: 10
+  control_period_s: 0.1
