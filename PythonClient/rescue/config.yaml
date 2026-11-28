@@ -89,7 +89,7 @@ ground_truth:                   # tags of the people placed in the level, to mea
 ugv:                            # the Husky (ugv.py)
   name: Car1
   port: 41452
-  spawn_ned: [0, 0, -2]         # must match Vehicles.Car1 X, Y, Z in settings.json; home is here
+  spawn_ned: [2, 0, -1.5]       # must match Vehicles.Car1 X, Y, Z in settings.json; home is here
   lidar: Lidar1                 # Vehicles.Car1.Sensors in settings.json
   subscribe: tcp://localhost:5556   # where mission.py publishes victims
   medkits: [MedKit_1, MedKit_2, MedKit_3, MedKit_4]  # tags of kit actors placed in the level (Movable)
@@ -103,7 +103,8 @@ ugv:                            # the Husky (ugv.py)
   stop_distance_m: 2.0          # stop this far from a victim
   kit_offset_m: 1.0             # the kit goes this far from the victim, on the UGV's side
   home_radius_m: 1.5
-  base_height_m: 0.3            # the UGV's origin above the ground
+  base_height_m: 0.6            # the UGV's origin above the ground (--check: the ground came out
+                                #   0.33 m below the 0.3 assumed before)
   obstacle_min_height_m: 0.5    # lidar points this high above the ground and up to ...
   obstacle_max_height_m: 2.5    #   ... this are obstacles; lower is ground, higher is canopy
   map_size_m: 240               # square map centred on home
