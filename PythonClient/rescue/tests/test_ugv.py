@@ -257,7 +257,7 @@ def test_unreachable_victim_is_given_up_and_the_ugv_goes_home(ugv_mod, capsys):
     out = capsys.readouterr().out
     assert "giving up" in out or "took too long" in out
     if "giving up" in out:
-        assert "everywhere within 2.0 m of victim 1 is blocked" in out
+        assert "every way there is blocked" in out    # the victim's surroundings are free; the ring isn't
         assert list(OUT.glob("ugv_noway_*.png"))
     assert len(u.failed) == 1 and not u.served
     assert car.collisions == 0
@@ -283,11 +283,13 @@ def test_check_says_when_the_husky_doesnt_move(ugv_mod, capsys):
 
 
 def test_a_gap_too_narrow_for_the_safety_margin_is_squeezed_through(ugv_mod, capsys):
-    # A wall of posts across the way with a 2.4 m gap: wide enough for the robot (radius 0.6 m)
-    # but not with the 0.4 m margin on top.
-    posts = [(10, y, 0.25) for y in np.arange(-45, -1.2 + 0.01, 0.4)] + \
-            [(10, y, 0.25) for y in np.arange(1.2, 45.01, 0.4)]
+    # A wall of posts across the whole map with a 2.4 m gap: wide enough for the robot (radius
+    # 0.6 m) but not with the 0.4 m margin on top. (With a way around the wall's end, it would
+    # rather take that.)
+    posts = [(10, y, 0.25) for y in np.arange(-31, -1.2 + 0.01, 0.4)] + \
+            [(10, y, 0.25) for y in np.arange(1.2, 31.01, 0.4)]
     u, car = make(ugv_mod, posts, [(0.0, victim(1, 20, 0))])
+    u.grid = OccupancyGrid((0, 0), 60, 0.25)
     u.run(once=True)
     out = capsys.readouterr().out
     assert "narrow gap" in out
