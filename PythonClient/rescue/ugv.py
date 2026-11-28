@@ -128,6 +128,7 @@ class Ugv:
         self.queue, self.served, self.failed, self.seen_ids = [], [], [], set()
         self.kits = list(u["medkits"])
         self.path, self.last_plan, self.squeezing, self.backing = None, -math.inf, False, False
+        self._orientation = None
         self.turn_leg = "back"
         self.t0 = self.now()
 
@@ -154,6 +155,7 @@ class Ugv:
         """(position xy, heading rad, speed m/s, z) in the UGV's local NED frame."""
         s = self.client.getCarState(vehicle_name=self.name)
         p = s.kinematics_estimated.position
+        self._orientation = s.kinematics_estimated.orientation  # for tilt_deg(), without another call
         return np.array([p.x_val, p.y_val]), yaw_of(s.kinematics_estimated.orientation), s.speed, p.z_val
 
     def right(self, heading):
@@ -167,21 +169,22 @@ class Ugv:
         self.sleep(1.0)
 
     def tilt_deg(self):
-        """How far the UGV leans from upright (deg): over ~60 it has tipped over."""
-        q = self.client.getCarState(vehicle_name=self.name).kinematics_estimated.orientation
+        """How far the UGV leans from upright (deg) at the last state(): over ~60 it has tipped over."""
+        q = self._orientation
         # The body's down axis in the world: its z component is cos(tilt).
         down_z = 1 - 2 * (q.x_val ** 2 + q.y_val ** 2)
         return math.degrees(math.acos(max(-1.0, min(1.0, down_z))))
 
-    def sense(self):
-        """Add the latest lidar sweep to the map."""
+    def sense(self, pos=None, z=None):
+        """Add the latest lidar sweep to the map (pos and z: the UGV's, if just read)."""
         u = self.u
         data = self.client.getLidarData(lidar_name=u["lidar"], vehicle_name=self.name)
         pts = np.asarray(data.point_cloud, float)
         if len(pts) < 3:
             return
         pts = pts[: len(pts) // 3 * 3].reshape(-1, 3)
-        pos, _, _, z = self.state()
+        if pos is None:
+            pos, _, _, z = self.state()
         ground_z = z + u["base_height_m"]   # NED: down is +z
         height = ground_z - pts[:, 2]
         # Obstacles stick up from the ground; a drop (an edge, a ditch) shows as hits well below it.
@@ -300,8 +303,10 @@ class Ugv:
         want = u["max_speed"] if abs(alpha) < 0.5 and not self.backing else u["slow_speed"]
         want = min(want, max(u["slow_speed"], np.linalg.norm(np.asarray(path[-1]) - pos) / 2))
         mag = abs(speed)
-        throttle = float(np.clip(0.3 + 0.4 * (want - mag), 0, u["max_throttle"])) if mag < want + 0.3 else 0.0
-        brake = 0.0 if mag < want + 0.3 else 0.3
+        # Proportional throttle, and a brake only when well over: on/off throttle and a brake at the
+        # first sign of overspeed made it surge and stop.
+        throttle = float(np.clip(0.25 + 0.5 * (want - mag), 0, u["max_throttle"]))
+        brake = 0.2 if mag > want + 0.8 else 0.0
         # Less steering the faster it goes: full lock only at walking pace (full lock at speed
         # is what rolls a vehicle).
         limit = 1.0 / (1.0 + max(mag - 0.5, 0.0))
@@ -339,7 +344,8 @@ class Ugv:
                 self.log(f"  control loop: {span / n:.2f} s per step (lidar + map {timing['sense'] / n:.2f} s, "
                          f"planning {timing['plan'] / n:.2f} s); want {u['control_period_s']:.2f} s")
                 timing.update(steps=0, sense=0.0, plan=0.0, since=self.now())
-            pos, heading, speed, _ = self.state()
+            step_start = self.now()
+            pos, heading, speed, z = self.state()
             tilt = self.tilt_deg()
             if tilt > TIPPED_DEG:
                 self.stop()
@@ -356,7 +362,7 @@ class Ugv:
             if tilt > LEAN_DEG:
                 # Leaning hard: ease off and straighten up before it rolls.
                 self.controls(throttle=0.0, steering=0.0, brake=0.5)
-                self.sleep(u["control_period_s"])
+                self.sleep(max(0.0, u["control_period_s"] - (self.now() - step_start)))
                 continue
             if np.linalg.norm(goal - pos) <= tolerance + 0.3:
                 self.stop()
@@ -366,7 +372,7 @@ class Ugv:
                 self.log(f"WARNING: gave up on {what}: took too long")
                 return "failed"
             t_sense = self.now()
-            self.sense()
+            self.sense(pos, z)
             timing["sense"] += self.now() - t_sense
             self.check_victims()
             if interrupt is not None and interrupt():
@@ -386,7 +392,7 @@ class Ugv:
                     self.log(f"WARNING: no way to {what} in the map: "
                              f"{self.explain_no_path(pos, goal, tolerance, what)}; giving up")
                     return "failed"
-                self.sleep(u["control_period_s"])
+                self.sleep(max(0.0, u["control_period_s"] - (self.now() - step_start)))
                 continue
             no_path_since = None
             throttle, steering, brake = self.steer(pos, heading, speed)
@@ -412,7 +418,7 @@ class Ugv:
                 slow_since, self.path, self.last_plan = None, None, -math.inf
                 continue
             self.controls(throttle, steering, brake)
-            self.sleep(u["control_period_s"])
+            self.sleep(max(0.0, u["control_period_s"] - (self.now() - step_start)))
 
     def mark_bump(self, pos, direction):
         """Put what the UGV is pushing against into the map, so the next plan goes around it
