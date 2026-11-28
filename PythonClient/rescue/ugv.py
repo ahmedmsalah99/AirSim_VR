@@ -512,6 +512,23 @@ class Ugv:
 
     # ---- the job -----------------------------------------------------------------------
 
+    def kit_z(self, spot):
+        """World NED z for a kit resting on the ground at spot (local xy): the ground there from the
+        lidar's height map, else where the UGV stands, which is right beside it. (The victim's z
+        was a guess from home's height in --victim runs: on a hilly map the kit ended up in the air
+        or underground.)"""
+        _, _, _, z_local = self.state()
+        ground_up = self.grid.ground[tuple(self.grid.to_cell(spot))] if self.grid.inside(self.grid.to_cell(spot)) \
+            else float("nan")
+        ground_local = -float(ground_up) if not math.isnan(ground_up) else z_local + self.u["base_height_m"]
+        # Local NED -> world NED: the UGV's actor position in both frames.
+        try:
+            world = self.client.simGetObjectPose(self.name).position
+            offset = world.z_val - z_local if not math.isnan(world.z_val) else self.spawn[2]
+        except Exception:  # noqa: BLE001
+            offset = self.spawn[2]
+        return ground_local + offset - KIT_HEIGHT_M
+
     def drop_kit(self, victim):
         """Move a pre-placed kit next to the victim, on the UGV's side."""
         pos = self.state()[0]
@@ -521,8 +538,9 @@ class Ugv:
         tag = self.kits.pop(0)
         away = pos - victim["local"]
         away = away / np.linalg.norm(away) if np.linalg.norm(away) > 1e-6 else np.array([1.0, 0.0])
-        xy = self.to_world(victim["local"] + away * self.u["kit_offset_m"])
-        z = victim["world"][2] - KIT_HEIGHT_M
+        spot = victim["local"] + away * self.u["kit_offset_m"]
+        xy = self.to_world(spot)
+        z = self.kit_z(spot)
         pose = self.airsim.Pose(self.airsim.Vector3r(xy[0], xy[1], z), self.airsim.Quaternionr())
         if not self.client.simSetObjectPose(tag, pose, True):
             self.log(f"WARNING: couldn't move {tag}: is an actor tagged {tag} in the level, with "

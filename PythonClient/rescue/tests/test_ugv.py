@@ -151,7 +151,7 @@ class SimCar:
 
     def simGetObjectPose(self, tag):
         x, y = getattr(self, "actors", {}).get(tag, (float("nan"), float("nan")))
-        return types.SimpleNamespace(position=Vec(x, y, -0.9))
+        return types.SimpleNamespace(position=Vec(x, y, -0.9 if not math.isnan(x) else float("nan")))
 
     def simGetVehiclePose(self, vehicle_name=""):
         return types.SimpleNamespace(position=Vec(self.x, self.y, self.z))
@@ -227,7 +227,7 @@ def test_drives_around_trees_to_the_victim_drops_a_kit_and_returns_home(ugv_mod,
     assert "MedKit_1 placed beside victim 1" in out
     kx, ky, kz = car.kits["MedKit_1"]
     assert math.hypot(kx - 25, ky) == pytest.approx(u.u["kit_offset_m"], abs=0.05)
-    assert kz == pytest.approx(-0.15)
+    assert kz == pytest.approx(-2.0 - 0.15, abs=0.1)      # on the ground where it stands (world = local + spawn)
     assert math.hypot(car.x, car.y) <= u.u["home_radius_m"] + 0.3   # back home
     assert len(u.served) == 1
 
