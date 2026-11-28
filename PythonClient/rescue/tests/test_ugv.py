@@ -78,8 +78,9 @@ class Quat:
 class SimCar:
     """AirSim CarClient stand-in. Every setCarControls() runs the car for DT."""
 
-    def __init__(self, obstacles, spawn_z=-2.0):
+    def __init__(self, obstacles, spawn_z=-2.0, unseen=()):
         self.obstacles = obstacles  # [(x, y, radius)] in the car's local frame
+        self.unseen = list(unseen)  # obstacles the lidar misses but the car still hits
         self.x = self.y = self.yaw = self.v = 0.0
         self.z = 0.0
         self.t = 0.0
@@ -96,7 +97,7 @@ class SimCar:
             steer = float(np.clip(c.steering, -1, 1)) * MAX_STEER
             nx = self.x + self.v * math.cos(self.yaw) * DT
             ny = self.y + self.v * math.sin(self.yaw) * DT
-            if any(math.hypot(nx - ox, ny - oy) < r + 0.5 for ox, oy, r in self.obstacles):
+            if any(math.hypot(nx - ox, ny - oy) < r + 0.5 for ox, oy, r in self.obstacles + self.unseen):
                 self.v, self.collisions = 0.0, self.collisions + 1
             else:
                 self.x, self.y = nx, ny
@@ -189,11 +190,11 @@ def ugv_mod(monkeypatch, tmp_path):
     return ugv, load_config()
 
 
-def make(ugv_mod, obstacles, schedule):
+def make(ugv_mod, obstacles, schedule, unseen=()):
     mod, cfg = ugv_mod
     mod.OUTPUT_DIR = OUT
     cfg["ugv"]["spawn_ned"] = [0, 0, -2]
-    car = SimCar(obstacles)
+    car = SimCar(obstacles, unseen=unseen)
     u = mod.Ugv(cfg, client=car, subscriber=Inbox(car, schedule))
     u.now = lambda: car.t
     u.t0 = 0.0
@@ -334,3 +335,20 @@ def test_a_victim_behind_in_a_tight_spot_is_reached_in_reverse(ugv_mod, capsys):
     u.run(once=True)
     assert len(u.served) == 1 and car.collisions == 0
     assert any(seen_reverse)
+
+
+def test_something_the_lidar_misses_is_bumped_once_marked_and_driven_around(ugv_mod, capsys):
+    u, car = make(ugv_mod, [], [(0.0, victim(1, 20, 0))], unseen=[(10, 0, 0.5)])
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert out.count("marking it in the map") <= 2
+    assert len(u.served) == 1
+
+
+def test_bumping_into_the_victim_near_the_goal_counts_as_arrived(ugv_mod, capsys):
+    # The drone placed the victim 1.5 m beyond where they really stand, and the lidar misses them.
+    u, car = make(ugv_mod, [], [(0.0, victim(1, 16.5, 0))], unseen=[(15, 0, 0.4)])
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "close enough" in out
+    assert len(u.served) == 1 and "MedKit_1 placed" in out

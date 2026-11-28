@@ -37,6 +37,7 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
 STUCK_TIME_S = 3.0      # ... for this long
 REVERSE_TIME_S = 2.0
+BUMP_ARRIVE_M = 1.5             # stuck within stop_distance + this of the goal counts as arrived
 REVERSE_ON = math.radians(110)   # a path target this far off the nose is driven to in reverse ...
 REVERSE_OFF = math.radians(80)   # ... until it's back within this of the nose
 PATH_COLOR = [0.1, 0.4, 1.0, 1.0]
@@ -297,8 +298,16 @@ class Ugv:
             if throttle != 0 and abs(speed) < STUCK_SPEED:
                 slow_since = slow_since or self.now()
                 if self.now() - slow_since > STUCK_TIME_S:
-                    self.log(f"stuck {'reversing' if throttle < 0 else 'going forward'} "
-                             f"({self.touching()}); backing off the other way")
+                    way = "reversing" if throttle < 0 else "going forward"
+                    left = float(np.linalg.norm(goal - pos))
+                    if left <= tolerance + BUMP_ARRIVE_M:
+                        # Against something right by the goal: most likely the victim themself,
+                        # a little off where the drone placed them.
+                        self.stop()
+                        self.log(f"stuck {way} {left:.1f} m from {what} ({self.touching()}): close enough")
+                        return "arrived"
+                    self.log(f"stuck {way} ({self.touching()}); marking it in the map and backing off")
+                    self.mark_bump(pos, heading + (math.pi if throttle < 0 else 0.0))
                     self.escape(-1 if throttle > 0 else 1, -steering)
                     slow_since, self.path, self.last_plan = None, None, -math.inf
                     continue
@@ -306,6 +315,14 @@ class Ugv:
                 slow_since = None
             self.controls(throttle, steering, brake)
             self.sleep(u["control_period_s"])
+
+    def mark_bump(self, pos, direction):
+        """Put what the UGV is pushing against into the map: a short line across its path, just
+        beyond its bumper, so the next plan goes around it instead of into it again."""
+        ahead = np.array([math.cos(direction), math.sin(direction)])
+        side = np.array([-ahead[1], ahead[0]])
+        front = pos + ahead * (self.u["robot_radius_m"] + 0.3)
+        self.grid.mark([front + side * w for w in np.arange(-0.5, 0.51, 0.25)])
 
     def escape(self, direction, steering):
         """Drive REVERSE_TIME_S the given way (1 forward, -1 back; auto gear: a negative throttle
