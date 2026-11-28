@@ -23,6 +23,7 @@ The UGV's position comes from AirSim (its pose is the SLAM pose); the map is
 built from the lidar alone. Ctrl+C stops it where it is.
 """
 import argparse
+import collections
 import json
 import math
 import sys
@@ -39,6 +40,8 @@ STUCK_MOVE_M = 0.3      # moving less than this while driving ...
 STUCK_TIME_S = 4.0      # ... for this long is stuck
 REVERSE_TIME_S = 2.0
 TIMING_EVERY_S = 10     # log how long a control step takes, this often
+STEADY_DEG = 10      # leaning less than this, it stands steady: a place to right it at ...
+RIGHT_BACK_S = 2.0   # ... from at least this long before it tipped
 TIPPED_DEG = 60       # leaning more than this: it has tipped over ...
 MAX_RIGHTINGS = 3     # ... and is set back on its wheels up to this many times per trip
 LEAN_DEG = 25         # leaning more than this: ease off and straighten up
@@ -129,6 +132,7 @@ class Ugv:
         self.kits = list(u["medkits"])
         self.path, self.last_plan, self.squeezing, self.backing = None, -math.inf, False, False
         self._orientation = None
+        self.last_points = 0
         self.turn_leg = "back"
         self.t0 = self.now()
 
@@ -158,12 +162,12 @@ class Ugv:
         self._orientation = s.kinematics_estimated.orientation  # for tilt_deg(), without another call
         return np.array([p.x_val, p.y_val]), yaw_of(s.kinematics_estimated.orientation), s.speed, p.z_val
 
-    def right(self, heading):
-        """Put the UGV back on its wheels where it is, facing heading, a little above the ground."""
+    def right(self, pos, heading, z):
+        """Put the UGV back on its wheels at pos (local xy) and height z (local NED), facing
+        heading, a little above the ground."""
         a = self.airsim
-        pose = self.client.simGetVehiclePose(vehicle_name=self.name)
         h = heading / 2
-        upright = a.Pose(a.Vector3r(pose.position.x_val, pose.position.y_val, pose.position.z_val - 0.5),
+        upright = a.Pose(a.Vector3r(float(pos[0]), float(pos[1]), float(z) - 0.3),
                          a.Quaternionr(0.0, 0.0, math.sin(h), math.cos(h)))
         self.client.simSetVehiclePose(upright, True, vehicle_name=self.name)
         self.sleep(1.0)
@@ -176,12 +180,16 @@ class Ugv:
         return math.degrees(math.acos(max(-1.0, min(1.0, down_z))))
 
     def sense(self, pos=None, z=None):
-        """Add the latest lidar sweep to the map (pos and z: the UGV's, if just read)."""
+        """Add the latest lidar sweep to the map (pos and z: the UGV's, if just read). Returns the
+        time the fetch from AirSim took."""
         u = self.u
+        start = self.now()
         data = self.client.getLidarData(lidar_name=u["lidar"], vehicle_name=self.name)
         pts = np.asarray(data.point_cloud, float)
+        fetch = self.now() - start
+        self.last_points = len(pts) // 3
         if len(pts) < 3:
-            return
+            return fetch
         pts = pts[: len(pts) // 3 * 3].reshape(-1, 3)
         if pos is None:
             pos, _, _, z = self.state()
@@ -195,6 +203,7 @@ class Ugv:
         # steps and slopes too steep to drive (a ramp, a bank, a kerb) as obstacles.
         surface = height <= u["obstacle_max_height_m"]
         self.grid.update_ground(pts[surface, :2], -pts[surface, 2], u["max_step_m"], u["max_slope_deg"])
+        return fetch
 
     def check_victims(self):
         """Queue newly published victims (by id; one within 3 m of a known one is the same)."""
@@ -339,15 +348,17 @@ class Ugv:
         self.path, self.last_plan, slow_since, no_path_since = None, -math.inf, None, None
         self.backing = False
         rightings = 0
-        timing = {"steps": 0, "sense": 0.0, "plan": 0.0, "since": self.now()}
+        stable = collections.deque()   # (time, pos, heading, z) while it stood steady, recent first last
+        timing = {"steps": 0, "sense": 0.0, "fetch": 0.0, "plan": 0.0, "since": self.now()}
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
             timing["steps"] += 1
             if self.now() - timing["since"] >= TIMING_EVERY_S:
                 n, span = timing["steps"], self.now() - timing["since"]
-                self.log(f"  control loop: {span / n:.2f} s per step (lidar + map {timing['sense'] / n:.2f} s, "
-                         f"planning {timing['plan'] / n:.2f} s); want {u['control_period_s']:.2f} s")
-                timing.update(steps=0, sense=0.0, plan=0.0, since=self.now())
+                self.log(f"  control loop: {span / n:.2f} s per step (lidar fetch {timing['fetch'] / n:.2f} s, "
+                         f"map {(timing['sense'] - timing['fetch']) / n:.2f} s, planning {timing['plan'] / n:.2f} s, "
+                         f"{self.last_points} points); want {u['control_period_s']:.2f} s")
+                timing.update(steps=0, sense=0.0, fetch=0.0, plan=0.0, since=self.now())
             step_start = self.now()
             pos, heading, speed, z = self.state()
             tilt = self.tilt_deg()
@@ -358,11 +369,24 @@ class Ugv:
                              f"{rightings + 1} times; stopping (restart Play to put it back)")
                     raise TippedOver(what)
                 rightings += 1
+                # Back on its wheels where it last stood steady (on the spot where it fell, it
+                # rolled straight off again), and that spot marked so the next plan avoids it.
+                back = [s for s in stable if self.now() - s[0] >= RIGHT_BACK_S] or list(stable) or \
+                       [(self.now(), pos, heading, z)]
+                _, safe_pos, safe_heading, safe_z = back[-1]
                 self.log(f"tipped over ({tilt:.0f} deg from upright); setting it back on its wheels "
-                         f"({rightings}/{MAX_RIGHTINGS})")
-                self.right(heading)
+                         f"{np.linalg.norm(pos - safe_pos):.1f} m back, where it was steady, and marking "
+                         f"the spot ({rightings}/{MAX_RIGHTINGS})")
+                self.grid.mark([pos + np.array([dx, dy]) for dx in np.arange(-0.75, 0.76, 0.25)
+                                for dy in np.arange(-0.75, 0.76, 0.25) if dx * dx + dy * dy <= 0.6])
+                self.right(safe_pos, safe_heading, safe_z)
+                stable.clear()
                 self.path, self.last_plan = None, -math.inf
                 continue
+            if tilt < STEADY_DEG:
+                stable.append((self.now(), pos.copy(), heading, z))
+                while stable and self.now() - stable[0][0] > 2 * RIGHT_BACK_S:
+                    stable.popleft()
             if tilt > LEAN_DEG:
                 # Leaning hard: ease off and straighten up before it rolls.
                 self.controls(throttle=0.0, steering=0.0, brake=0.5)
@@ -376,7 +400,7 @@ class Ugv:
                 self.log(f"WARNING: gave up on {what}: took too long")
                 return "failed"
             t_sense = self.now()
-            self.sense(pos, z)
+            timing["fetch"] += self.sense(pos, z)
             timing["sense"] += self.now() - t_sense
             self.check_victims()
             if interrupt is not None and interrupt():

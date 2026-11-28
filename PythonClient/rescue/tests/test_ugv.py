@@ -159,6 +159,7 @@ class SimCar:
     def simSetVehiclePose(self, pose, ignore_collision, vehicle_name=""):
         self.tipped = False
         self.righted = getattr(self, "righted", 0) + 1
+        self.x, self.y = pose.position.x_val, pose.position.y_val
         q = pose.orientation
         self.yaw = 2 * math.atan2(q.z_val, q.w_val)
         self.v = 0.0

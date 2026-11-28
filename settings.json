@@ -36,7 +36,7 @@
           "NumberOfChannels": 16,
           "Range": 30,
           "RotationsPerSecond": 60,
-          "PointsPerSecond": 300000,
+          "PointsPerSecond": 60000,
           "VerticalFOVUpper": 10,
           "VerticalFOVLower": -30,
           "X": 0,
