@@ -94,7 +94,8 @@ ugv:                            # the Husky (ugv.py)
   subscribe: tcp://localhost:5556   # where mission.py publishes victims
   medkits: [MedKit_1, MedKit_2, MedKit_3, MedKit_4]  # tags of kit actors placed in the level (Movable)
   max_speed: 2.0                # m/s on straight path (it tipped over at 3)
-  slow_speed: 1.0               # in turns and near the goal
+  slow_speed: 0.7               # in turns and near the goal
+  max_throttle: 0.6             # never floor it: sudden pulls tip it
   lookahead_m: 2.5              # pure pursuit
   steering_gain: 1.2            # steering per radian of heading error
   steering_sign: 1              # -1 if the Husky turns the wrong way

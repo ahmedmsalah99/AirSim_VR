@@ -149,6 +149,16 @@ class SimCar:
     def simPlotLineStrip(self, *a, **k):
         pass
 
+    def simGetVehiclePose(self, vehicle_name=""):
+        return types.SimpleNamespace(position=Vec(self.x, self.y, self.z))
+
+    def simSetVehiclePose(self, pose, ignore_collision, vehicle_name=""):
+        self.tipped = False
+        self.righted = getattr(self, "righted", 0) + 1
+        q = pose.orientation
+        self.yaw = 2 * math.atan2(q.z_val, q.w_val)
+        self.v = 0.0
+
     def simGetCollisionInfo(self, vehicle_name=""):
         return types.SimpleNamespace(has_collided=self.collisions > 0, object_name="Tree")
 
@@ -180,7 +190,7 @@ def ugv_mod(monkeypatch, tmp_path):
 
     fake.CarControls = CarControls
     fake.Vector3r = Vec
-    fake.Quaternionr = Quat
+    fake.Quaternionr = lambda x=0.0, y=0.0, z=0.0, w=1.0: Quat(w, x, y, z)   # AirSim's argument order
     fake.Pose = lambda position, orientation: types.SimpleNamespace(position=position, orientation=orientation)
     monkeypatch.setitem(sys.modules, "airsim", fake)
     monkeypatch.setitem(sys.modules, "setup_path", types.ModuleType("setup_path"))
@@ -368,19 +378,38 @@ def test_reverse_uses_the_reverse_gear(ugv_mod):
     assert not car.cmd.is_manual_gear and car.cmd.manual_gear == 0
 
 
-def test_tipping_over_is_reported_and_stops_the_run(ugv_mod, capsys):
-    u, car = make(ugv_mod, [], [(0.0, victim(1, 20, 0))])
+def on_its_side_when(car, condition):
+    """Make car report lying on its side while condition() holds and it hasn't been set upright."""
     real = car.getCarState
+    car.tipped = False
 
-    def on_its_side(vehicle_name=""):
+    def state(vehicle_name=""):
         s = real(vehicle_name)
-        if car.t > 2:   # rolled 90 deg about its x axis
+        if condition():
+            car.tipped = True
+        if car.tipped:   # rolled 90 deg about its x axis
             s.kinematics_estimated.orientation = Quat(math.cos(math.pi / 4), math.sin(math.pi / 4), 0, 0)
         return s
-    car.getCarState = on_its_side
+    car.getCarState = state
+
+
+def test_tipping_over_for_good_is_reported_and_stops_the_run(ugv_mod, capsys):
+    u, car = make(ugv_mod, [], [(0.0, victim(1, 20, 0))])
+    on_its_side_when(car, lambda: car.t > 2)          # tips straight back over every time
     u.run(once=True)
     out = capsys.readouterr().out
-    assert "tipped over (90 deg" in out and not u.served
+    assert out.count("setting it back on its wheels") == 3
+    assert "tipped over (90 deg from upright) on the way to victim 1 4 times" in out and not u.served
+
+
+def test_a_tip_over_is_righted_and_the_trip_goes_on(ugv_mod, capsys):
+    u, car = make(ugv_mod, [], [(0.0, victim(1, 20, 0))])
+    bumps = []
+    on_its_side_when(car, lambda: car.t > 2 and not bumps.append(1) and len(bumps) == 1)   # one bad bump
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "setting it back on its wheels" in out and car.righted == 1
+    assert len(u.served) == 1
 
 
 def test_a_drop_is_an_obstacle(ugv_mod):
