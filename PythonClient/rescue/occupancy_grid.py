@@ -30,6 +30,10 @@ class OccupancyGrid:
         self.logodds = np.zeros((self.n, self.n), np.float32)
         self._blocked = {}  # radius -> grown obstacles (kept up to date by update())
         self._updates = 0
+        # Terrain: the lowest surface height (m, up) seen in each cell, and cells where the ground
+        # is too steep or has a step (set by update_ground).
+        self.ground = np.full((self.n, self.n), np.nan, np.float32)
+        self.steep = np.zeros((self.n, self.n), bool)
         self.bounds = None  # (lo_xy, hi_xy): the robot's centre stays inside
 
     # ---- cells -------------------------------------------------------------------------
@@ -106,7 +110,44 @@ class OccupancyGrid:
         return np.unique(cells, axis=0) if len(cells) else cells
 
     def occupied(self):
-        return self.logodds > L_OCCUPIED
+        return (self.logodds > L_OCCUPIED) | self.steep
+
+    def update_ground(self, xy, up, step_m, max_slope_deg):
+        """Add surface points (xy, and height up in m, positive up) to the height map and mark
+        cells where the ground rises more than step_m within 0.5 m (the top of a kerb, a ramp's
+        edge), or more than max_slope_deg over 1 m (a bank, a ramp), as too steep to drive on."""
+        idx = self.to_cell(np.asarray(xy, float).reshape(-1, 2))
+        inside = self.inside(idx)
+        if not inside.any():
+            return
+        idx, up = idx[inside], np.asarray(up, np.float32)[inside]
+        flat = idx[:, 0] * self.n + idx[:, 1]
+        g = self.ground.reshape(-1)
+        np.fmin.at(g, flat, up)
+        # Recheck only the window around this scan's cells.
+        pad = int(math.ceil(1.0 / self.res)) + 1
+        i0, j0 = np.maximum(idx.min(axis=0) - pad, 0)
+        i1, j1 = np.minimum(idx.max(axis=0) + pad + 1, self.n)
+        win = self.ground[i0:i1, j0:j1]
+        steep = np.zeros(win.shape, bool)
+        short, long_ = max(1, round(0.5 / self.res)), max(1, round(1.0 / self.res))
+        for k, limit in ((short, step_m), (long_, long_ * self.res * math.tan(math.radians(max_slope_deg)))):
+            for di, dj in ((k, 0), (0, k), (k, k), (k, -k)):
+                limit_here = limit * (math.sqrt(2) if di and dj else 1.0)
+                a = win[max(di, 0):win.shape[0] + min(di, 0) or None, max(dj, 0):win.shape[1] + min(dj, 0) or None]
+                b = win[max(-di, 0):win.shape[0] + min(-di, 0) or None, max(-dj, 0):win.shape[1] + min(-dj, 0) or None]
+                # Mark the higher cell of a steep pair (the ramp, the top of the step): marking both
+                # would also block the flat ground at the foot of every wall and ramp.
+                with np.errstate(invalid="ignore"):
+                    a_up = (a - b) > limit_here            # nan (unseen) compares False
+                    b_up = (b - a) > limit_here
+                steep[max(di, 0):steep.shape[0] + min(di, 0) or None,
+                      max(dj, 0):steep.shape[1] + min(dj, 0) or None] |= a_up
+                steep[max(-di, 0):steep.shape[0] + min(-di, 0) or None,
+                      max(-dj, 0):steep.shape[1] + min(-dj, 0) or None] |= b_up
+        if (steep != self.steep[i0:i1, j0:j1]).any():
+            self.steep[i0:i1, j0:j1] = steep
+            self._blocked = {}
 
     def blocked(self, radius_m):
         """Occupied cells grown by radius_m: where the robot's centre can't go (a copy)."""
