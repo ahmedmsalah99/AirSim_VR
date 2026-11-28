@@ -87,7 +87,7 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
    ```
    python ugv.py --check
    ```
-   It reads one lidar sweep and prints where the ground comes out. If it's not near 0, change `ugv.base_height_m` by that much. Then it drives for 3 s with the steering at +0.5 and says what `ugv.steering_sign` should be.
+   It reads one lidar sweep, finds the ground in it, and prints the `ugv.base_height_m` to set. If that's wrong, the ground is mapped as obstacles, in rings around the UGV, and it finds itself boxed in. Then it drives for 3 s with the steering at +0.5 and says what `ugv.steering_sign` should be.
 
 **Run:** start the UGV first (ZeroMQ doesn't keep messages for late subscribers), then the drone:
 ```
@@ -96,7 +96,7 @@ python mission.py      # terminal 2
 ```
 What it does:
 1. **Queue:** each confirmed victim is queued. Ids already seen, and anyone within 3 m of a known victim, are ignored. At home it waits; when a victim arrives it drives to the nearest queued one.
-2. **Mapping, with no prior map:** every lidar sweep updates a 2D occupancy grid (`map_resolution_m` cells, log-odds). A point between `obstacle_min_height_m` and `obstacle_max_height_m` above the ground marks its cell occupied, and the cells its ray passed through get freer. Lower points are ground; higher ones are canopy and roofs. The UGV's position comes from AirSim, so this is mapping with a known pose: the map is built only from what the lidar has seen.
+2. **Mapping, with no prior map:** every lidar sweep updates a 2D occupancy grid (`map_resolution_m` cells, log-odds). A point between `obstacle_min_height_m` and `obstacle_max_height_m` above the ground marks its cell occupied, and the cells its ray passed through get freer. Lower points are ground; higher ones (branches, eaves) pass over the Husky, so only 0.5–1.0 m counts. The UGV's position comes from AirSim, so this is mapping with a known pose: the map is built only from what the lidar has seen.
 3. **Planning:** A* on the grid, with obstacles grown by `robot_radius_m + safety_margin_m`. Unknown cells count as free, so it heads straight for the goal and goes around what the lidar finds. It replans every `replan_s`, and immediately if something appears across its path. The path is drawn blue in the scene.
 4. **Driving:** pure pursuit. It steers at the point `lookahead_m` along the path, at `max_speed`, and slows to `slow_speed` in sharp turns and near the goal. If it pushes but doesn't move for 3 s, it backs up and replans.
 5. **Kit:** it stops `stop_distance_m` from the victim and moves the next kit to the ground `kit_offset_m` from them, on its side.
