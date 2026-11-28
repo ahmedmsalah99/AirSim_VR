@@ -66,7 +66,28 @@ void ACameraDirector::initializeForBeginPlay(ECameraDirectorMode view_mode,
     initial_ground_obs_offset_ = camera_start_location_ - 
         (follow_actor_ ? follow_actor_->GetActorLocation() : FVector::ZeroVector);
 
-    //set initial view mode
+    applyViewMode();
+}
+
+void ACameraDirector::setFollowTarget(AActor* follow_actor, APIPCamera* fpv_camera, APIPCamera* front_camera,
+    APIPCamera* back_camera)
+{
+    //leave the old vehicle: its cameras stop rendering, and the spring arm comes off it
+    disableCameras(true, true, false, true);
+    if (mode_ == ECameraDirectorMode::CAMERA_DIRECTOR_MODE_SPRINGARM_CHASE)
+        attachSpringArm(false);
+
+    follow_actor_ = follow_actor;
+    fpv_camera_ = fpv_camera;
+    front_camera_ = front_camera;
+    backup_camera_ = back_camera;
+
+    //the same view of the new vehicle (the external camera keeps its offset from it)
+    applyViewMode();
+}
+
+void ACameraDirector::applyViewMode()
+{
     switch (mode_) {
     case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FLY_WITH_ME: inputEventFlyWithView(); break;
     case ECameraDirectorMode::CAMERA_DIRECTOR_MODE_FPV: inputEventFpvView(); break;

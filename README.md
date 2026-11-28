@@ -85,7 +85,7 @@ python mission.py --victim Victim_01   # test one tagged person, no lanes
 python listen_victims.py               # (another terminal) print the published victims
 python ugv.py                          # (another terminal, start it first) the UGV delivers medical kits
 ```
-The detector model goes in `PythonClient/rescue/models/person_yolo11s.onnx`. The search area, speeds and thresholds are in `PythonClient/rescue/config.yaml`. To fit the area to a new map, use `set_area.py`. **[`PythonClient/rescue/README.md`](PythonClient/rescue/README.md)** has the full setup and explains how the plan, detection and confirmation work.
+While playing, **V** switches which vehicle the view follows (drone ↔ Husky), in the same view mode (**B** behind, **F** first person, **M** free camera). The detector model goes in `PythonClient/rescue/models/person_yolo11s.onnx`. The search area, speeds and thresholds are in `PythonClient/rescue/config.yaml`. To fit the area to a new map, use `set_area.py`. **[`PythonClient/rescue/README.md`](PythonClient/rescue/README.md)** has the full setup and explains how the plan, detection and confirmation work.
 
 ## Troubleshooting
 

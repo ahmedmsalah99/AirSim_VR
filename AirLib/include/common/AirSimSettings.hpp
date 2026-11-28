@@ -40,9 +40,12 @@ public: //types
         ImageType image_type;
         bool visible;
         std::string camera_name;
+        std::string vehicle_name; //whose camera; "" = the FPV vehicle
 
-        SubwindowSetting(int window_index_val = 0, ImageType image_type_val = ImageType::Scene, bool visible_val = false, const std::string& camera_name_val = "")
-            : window_index(window_index_val), image_type(image_type_val), visible(visible_val), camera_name(camera_name_val)
+        SubwindowSetting(int window_index_val = 0, ImageType image_type_val = ImageType::Scene, bool visible_val = false,
+            const std::string& camera_name_val = "", const std::string& vehicle_name_val = "")
+            : window_index(window_index_val), image_type(image_type_val), visible(visible_val), camera_name(camera_name_val),
+            vehicle_name(vehicle_name_val)
         {
         }
     };
@@ -1002,6 +1005,7 @@ private:
                         json_settings_child.getInt("ImageType", 0));
                     subwindow_setting.visible = json_settings_child.getBool("Visible", false);
                     subwindow_setting.camera_name = getCameraName(json_settings_child);
+                    subwindow_setting.vehicle_name = json_settings_child.getString("VehicleName", "");
                 }
             }
         }
