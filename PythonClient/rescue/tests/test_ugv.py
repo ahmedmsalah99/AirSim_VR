@@ -194,6 +194,7 @@ def make(ugv_mod, obstacles, schedule, unseen=()):
     mod, cfg = ugv_mod
     mod.OUTPUT_DIR = OUT
     cfg["ugv"]["spawn_ned"] = [0, 0, -2]
+    cfg["area"]["corner_a"], cfg["area"]["corner_b"] = [-200, -200], [200, 200]   # no bounds in the way
     car = SimCar(obstacles, unseen=unseen)
     u = mod.Ugv(cfg, client=car, subscriber=Inbox(car, schedule))
     u.now = lambda: car.t
@@ -380,3 +381,26 @@ def test_tipping_over_is_reported_and_stops_the_run(ugv_mod, capsys):
     u.run(once=True)
     out = capsys.readouterr().out
     assert "tipped over (90 deg" in out and not u.served
+
+
+def test_a_drop_is_an_obstacle(ugv_mod):
+    u, car = make(ugv_mod, [], [])
+    ground = car.z + u.u["base_height_m"]
+    pts = [6, 0, ground + 2.0,      # 2 m below the ground: past an edge
+           4, 0, ground + 0.2]      # a little lower ground: a gentle slope
+    car.getLidarData = lambda **k: types.SimpleNamespace(point_cloud=pts)
+    u.sense()
+    occ = u.grid.occupied()
+    assert occ[tuple(u.grid.to_cell((6, 0)))] and not occ[tuple(u.grid.to_cell((4, 0)))]
+
+
+def test_the_ugv_stays_inside_the_search_area(ugv_mod):
+    mod, cfg = ugv_mod
+    u, car = make(ugv_mod, [], [])
+    u.grid.set_bounds((-10, -10), (10, 10))
+    assert u.grid.plan((0, 0), (8, 0), 0.6) is not None
+    assert u.grid.plan((0, 0), (20, 0), 0.6) is None              # outside: unreachable
+    cfg["area"]["corner_a"], cfg["area"]["corner_b"] = [-20, -5], [30, 5]
+    v = mod.Ugv(cfg, client=car, subscriber=u.subscriber)
+    lo, hi = v.grid.bounds
+    assert lo == pytest.approx([-25, -10]) and hi == pytest.approx([35, 10])   # area + 5 m, local = world here

@@ -115,6 +115,11 @@ class Ugv:
         self.client = client or airsim.CarClient(port=u["port"])
         self.subscriber = subscriber or VictimSubscriber(u["subscribe"], cfg["publish"]["topic"])
         self.grid = OccupancyGrid((0.0, 0.0), u["map_size_m"], u["map_resolution_m"])
+        # Stay within the search area (plus a margin): beyond it the map may end or drop away.
+        (ax, ay), (bx, by) = cfg["area"]["corner_a"], cfg["area"]["corner_b"]
+        m = u["area_margin_m"]
+        self.grid.set_bounds(self.to_local((min(ax, bx) - m, min(ay, by) - m)),
+                             self.to_local((max(ax, bx) + m, max(ay, by) + m)))
         self.radius = u["robot_radius_m"] + u["safety_margin_m"]
         self.queue, self.served, self.failed, self.seen_ids = [], [], [], set()
         self.kits = list(u["medkits"])
@@ -165,7 +170,9 @@ class Ugv:
         pos, _, _, z = self.state()
         ground_z = z + u["base_height_m"]   # NED: down is +z
         height = ground_z - pts[:, 2]
-        obstacles = pts[(height >= u["obstacle_min_height_m"]) & (height <= u["obstacle_max_height_m"]), :2]
+        # Obstacles stick up from the ground; a drop (an edge, a ditch) shows as hits well below it.
+        obstacles = pts[((height >= u["obstacle_min_height_m"]) & (height <= u["obstacle_max_height_m"]))
+                        | (height < -u["drop_m"]), :2]
         self.grid.update(pos, obstacles)
 
     def check_victims(self):

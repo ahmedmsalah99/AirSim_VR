@@ -27,6 +27,7 @@ class OccupancyGrid:
         self.origin = np.asarray(center_xy, float) - self.n * resolution_m / 2  # corner of cell (0, 0)
         self.logodds = np.zeros((self.n, self.n), np.float32)
         self._blocked = {}  # radius -> grown obstacles, until the next update
+        self.bounds = None  # (lo_xy, hi_xy): the robot's centre stays inside
 
     # ---- cells -------------------------------------------------------------------------
 
@@ -98,10 +99,20 @@ class OccupancyGrid:
             self._blocked[radius_m] = self._grow(radius_m)
         return self._blocked[radius_m].copy()
 
+    def set_bounds(self, lo_xy, hi_xy):
+        """Keep the robot's centre inside this rectangle: everything outside is blocked."""
+        self.bounds = (np.asarray(lo_xy, float), np.asarray(hi_xy, float))
+        self._blocked = {}
+
     def _grow(self, radius_m):
         """Occupied cells and every cell within radius_m of one (obstacles are sparse, so the
-        disk is stamped around each occupied cell rather than shifting the whole map)."""
+        disk is stamped around each occupied cell rather than shifting the whole map), and
+        everything outside the bounds."""
         out = np.zeros((self.n, self.n), bool)
+        if self.bounds is not None:
+            (i0, j0), (i1, j1) = self.to_cell(self.bounds[0]), self.to_cell(self.bounds[1])
+            out[:] = True
+            out[max(i0, 0):max(i1 + 1, 0), max(j0, 0):max(j1 + 1, 0)] = False
         cells = np.argwhere(self.occupied())
         if not len(cells):
             return out
