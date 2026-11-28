@@ -38,7 +38,7 @@
           "RotationsPerSecond": 60,
           "PointsPerSecond": 300000,
           "VerticalFOVUpper": 10,
-          "VerticalFOVLower": -10,
+          "VerticalFOVLower": -30,
           "X": 0,
           "Y": 0,
           "Z": -1,

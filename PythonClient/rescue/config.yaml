@@ -106,7 +106,8 @@ ugv:                            # the Husky (ugv.py)
   home_radius_m: 1.5
   base_height_m: 0.0            # the UGV's origin above the ground: ugv.py --check prints the value
                                 #   (0.6 put the ground ~0.65 m high: the lidar mapped it as obstacles)
-  obstacle_min_height_m: 0.5    # lidar points this high above the ground and up to ...
+  obstacle_min_height_m: 0.3    # lidar points this high above the ground and up to ... (0.5 missed
+                                #   the drone on the ground, stumps and logs)
   obstacle_max_height_m: 1.0    #   ... this are obstacles; lower is ground, higher passes over the
                                 #   Husky (~0.4 m tall), e.g. branches and eaves. Walls, trunks and
                                 #   people still show between the two

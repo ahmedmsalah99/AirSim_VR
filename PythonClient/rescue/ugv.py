@@ -35,8 +35,8 @@ from occupancy_grid import OccupancyGrid
 from survey_plan import DEFAULT_CONFIG, load_config
 
 OUTPUT_DIR = Path(__file__).with_name("output")
-STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
-STUCK_TIME_S = 3.0      # ... for this long
+STUCK_MOVE_M = 0.3      # moving less than this while driving ...
+STUCK_TIME_S = 4.0      # ... for this long is stuck
 REVERSE_TIME_S = 2.0
 TIPPED_DEG = 60       # leaning more than this: it has tipped over ...
 MAX_RIGHTINGS = 3     # ... and is set back on its wheels up to this many times per trip
@@ -378,26 +378,27 @@ class Ugv:
                 continue
             no_path_since = None
             throttle, steering, brake = self.steer(pos, heading, speed)
-            # Stuck: pushing but not moving (against something the lidar misses). Back off the
-            # other way, with the steering the other way, and replan.
-            if throttle != 0 and abs(speed) < STUCK_SPEED:
-                slow_since = slow_since or self.now()
-                if self.now() - slow_since > STUCK_TIME_S:
-                    way = "reversing" if throttle < 0 else "going forward"
-                    left = float(np.linalg.norm(goal - pos))
-                    if left <= tolerance + BUMP_ARRIVE_M:
-                        # Against something right by the goal: most likely the victim themself,
-                        # a little off where the drone placed them.
-                        self.stop()
-                        self.log(f"stuck {way} {left:.1f} m from {what} ({self.touching()}): close enough")
-                        return "arrived"
-                    self.log(f"stuck {way} ({self.touching()}); marking it in the map and backing off")
-                    self.mark_bump(pos, heading + (math.pi if throttle < 0 else 0.0))
-                    self.escape(-1 if throttle > 0 else 1, -steering)
-                    slow_since, self.path, self.last_plan = None, None, -math.inf
-                    continue
-            else:
-                slow_since = None
+            # Stuck: driving but not getting anywhere (against something the lidar misses). Judged
+            # by distance moved, not speed: pushing against a pole it bounced, and its speed
+            # flickered above any threshold. Back off the other way and replan.
+            # (A change of direction restarts it: a multi-point turn goes back and forth in place.)
+            if (throttle == 0 or slow_since is None or np.sign(throttle) != slow_since[2]
+                    or np.linalg.norm(pos - slow_since[1]) > STUCK_MOVE_M):
+                slow_since = (self.now(), pos.copy(), np.sign(throttle))
+            elif self.now() - slow_since[0] > STUCK_TIME_S:
+                way = "reversing" if throttle < 0 else "going forward"
+                left = float(np.linalg.norm(goal - pos))
+                if left <= tolerance + BUMP_ARRIVE_M:
+                    # Against something right by the goal: most likely the victim themself,
+                    # a little off where the drone placed them.
+                    self.stop()
+                    self.log(f"stuck {way} {left:.1f} m from {what} ({self.touching()}): close enough")
+                    return "arrived"
+                self.log(f"stuck {way} ({self.touching()}); marking it in the map and backing off")
+                self.mark_bump(pos, heading + (math.pi if throttle < 0 else 0.0))
+                self.escape(-1 if throttle > 0 else 1, -steering)
+                slow_since, self.path, self.last_plan = None, None, -math.inf
+                continue
             self.controls(throttle, steering, brake)
             self.sleep(u["control_period_s"])
 
