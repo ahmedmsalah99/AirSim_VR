@@ -10,6 +10,8 @@
 
 #include "common/AirSimSettings.hpp"
 #include <stdexcept>
+#include <algorithm>
+#include <vector>
 
 
 ASimHUD::ASimHUD()
@@ -242,6 +244,7 @@ void ASimHUD::setupInputBindings()
     UAirBlueprintLib::BindActionToKey("InputEventToggleSubwindow1", EKeys::Two, this, &ASimHUD::inputEventToggleSubwindow1);
     UAirBlueprintLib::BindActionToKey("InputEventToggleSubwindow2", EKeys::Three, this, &ASimHUD::inputEventToggleSubwindow2);
     UAirBlueprintLib::BindActionToKey("InputEventToggleAll", EKeys::Zero, this, &ASimHUD::inputEventToggleAll);
+    UAirBlueprintLib::BindActionToKey("InputEventNextVehicle", EKeys::V, this, &ASimHUD::inputEventNextVehicle);
 }
 
 void ASimHUD::initializeSettings()
@@ -419,4 +422,28 @@ bool ASimHUD::readSettingsTextFromFile(FString settingsFilepath, std::string& se
     }
 
     return found;
+}
+
+// V: the view follows the next vehicle (in the same view mode), e.g. the drone, then the car.
+void ASimHUD::inputEventNextVehicle()
+{
+    if (!simmode_ || !simmode_->CameraDirector)
+        return;
+    std::vector<PawnSimApi*> vehicles;
+    for (auto api : simmode_->getApiProvider()->getVehicleSimApis())
+        vehicles.push_back(static_cast<PawnSimApi*>(api));
+    if (vehicles.size() < 2)
+        return;
+    std::sort(vehicles.begin(), vehicles.end(), [](PawnSimApi* a, PawnSimApi* b) {
+        return a->getVehicleName() < b->getVehicleName(); });
+
+    AActor* current = simmode_->CameraDirector->getFollowActor();
+    size_t next = 0;
+    for (size_t i = 0; i < vehicles.size(); ++i)
+        if (vehicles[i]->getPawn() == current)
+            next = (i + 1) % vehicles.size();
+
+    PawnSimApi* api = vehicles[next];
+    simmode_->CameraDirector->setFollowTarget(api->getPawn(), api->getCamera("fpv"), api->getCamera("back_center"), nullptr);
+    UAirBlueprintLib::LogMessageString("Viewing: ", api->getVehicleName(), LogDebugLevel::Informational);
 }

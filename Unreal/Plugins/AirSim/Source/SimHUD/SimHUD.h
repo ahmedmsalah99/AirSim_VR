@@ -34,6 +34,7 @@ public:
     void inputEventToggleSubwindow1();
     void inputEventToggleSubwindow2();
     void inputEventToggleAll();
+    void inputEventNextVehicle();
 
 
     ImageType getSubwindowCameraType(int window_index);

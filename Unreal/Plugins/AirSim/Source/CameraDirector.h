@@ -59,6 +59,9 @@ public:
 
     void initializeForBeginPlay(ECameraDirectorMode view_mode,
         AActor* follow_actor, APIPCamera* fpv_camera, APIPCamera* front_camera, APIPCamera* back_camera);
+    //follow another vehicle, in the current view mode
+    void setFollowTarget(AActor* follow_actor, APIPCamera* fpv_camera, APIPCamera* front_camera, APIPCamera* back_camera);
+    AActor* getFollowActor() const { return follow_actor_; }
 
     APIPCamera* getFpvCamera() const;
     APIPCamera* getExternalCamera() const;
@@ -67,6 +70,7 @@ public:
     void setCameraRotationLagEnabled(const bool lag_enabled) { this->camera_rotation_lag_enabled_ = lag_enabled; }
 
 private:
+    void applyViewMode();
     void setupInputBindings();
     void attachSpringArm(bool attach);
     void disableCameras(bool fpv, bool backup, bool external, bool front);
