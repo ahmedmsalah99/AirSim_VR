@@ -38,6 +38,7 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_MOVE_M = 0.3      # moving less than this while driving ...
 STUCK_TIME_S = 4.0      # ... for this long is stuck
 REVERSE_TIME_S = 2.0
+TIMING_EVERY_S = 10     # log how long a control step takes, this often
 TIPPED_DEG = 60       # leaning more than this: it has tipped over ...
 MAX_RIGHTINGS = 3     # ... and is set back on its wheels up to this many times per trip
 LEAN_DEG = 25         # leaning more than this: ease off and straighten up
@@ -329,8 +330,15 @@ class Ugv:
         self.path, self.last_plan, slow_since, no_path_since = None, -math.inf, None, None
         self.backing = False
         rightings = 0
+        timing = {"steps": 0, "sense": 0.0, "plan": 0.0, "since": self.now()}
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
+            timing["steps"] += 1
+            if self.now() - timing["since"] >= TIMING_EVERY_S:
+                n, span = timing["steps"], self.now() - timing["since"]
+                self.log(f"  control loop: {span / n:.2f} s per step (lidar + map {timing['sense'] / n:.2f} s, "
+                         f"planning {timing['plan'] / n:.2f} s); want {u['control_period_s']:.2f} s")
+                timing.update(steps=0, sense=0.0, plan=0.0, since=self.now())
             pos, heading, speed, _ = self.state()
             tilt = self.tilt_deg()
             if tilt > TIPPED_DEG:
@@ -357,7 +365,9 @@ class Ugv:
                 self.stop()
                 self.log(f"WARNING: gave up on {what}: took too long")
                 return "failed"
+            t_sense = self.now()
             self.sense()
+            timing["sense"] += self.now() - t_sense
             self.check_victims()
             if interrupt is not None and interrupt():
                 return "interrupted"
@@ -366,7 +376,9 @@ class Ugv:
             if (self.now() - self.last_plan >= u["replan_s"] or (
                     self.path is not None
                     and self.grid.path_blocked([tuple(pos)] + list(self.path[1:]), self.radius))):
+                t_plan = self.now()
                 self.replan(pos, goal, tolerance)
+                timing["plan"] += self.now() - t_plan
             if self.path is None:
                 self.stop()
                 no_path_since = no_path_since or self.now()
@@ -403,8 +415,19 @@ class Ugv:
             self.sleep(u["control_period_s"])
 
     def mark_bump(self, pos, direction):
-        """Put what the UGV is pushing against into the map: a short line across its path, just
-        beyond its bumper, so the next plan goes around it instead of into it again."""
+        """Put what the UGV is pushing against into the map, so the next plan goes around it
+        instead of into it again: where AirSim says it hit (a corner or a side touches a pole as
+        often as the bumper), else a short line across its path just beyond its bumper."""
+        try:
+            info = self.client.simGetCollisionInfo(vehicle_name=self.name)
+            p = info.impact_point
+            hit = np.array([p.x_val, p.y_val])
+            if (info.has_collided and "ground" not in info.object_name.lower()
+                    and np.linalg.norm(hit - pos) < self.u["robot_radius_m"] + 1.0):
+                self.grid.mark([hit + np.array([dx, dy]) for dx in (-0.25, 0, 0.25) for dy in (-0.25, 0, 0.25)])
+                return
+        except Exception:  # noqa: BLE001 - fall back to the bumper
+            pass
         ahead = np.array([math.cos(direction), math.sin(direction)])
         side = np.array([-ahead[1], ahead[0]])
         front = pos + ahead * (self.u["robot_radius_m"] + 0.3)
