@@ -11,12 +11,14 @@ car_controls = airsim.CarControls()
 
 print("Car1: Going backward")
 
-# === OPTION 1: Reverse using negative throttle (automatic gear) ===
-car_controls.throttle = -0.5      # negative = reverse
+# Reverse: a negative throttle in the reverse gear (in automatic gear it only brakes)
+car_controls.throttle = -0.5
 car_controls.steering = 0.0
 car_controls.brake = 0.0
 car_controls.handbrake = False
-car_controls.is_manual_gear = False
+car_controls.is_manual_gear = True
+car_controls.manual_gear = -1
+car_controls.gear_immediate = True
 
 for _ in range(80):   # ~4 seconds
     client.setCarControls(car_controls, "Car1")
@@ -26,6 +28,8 @@ for _ in range(80):   # ~4 seconds
 print("Car1: Stopping")
 car_controls.throttle = 0.0
 car_controls.brake = 1.0
+car_controls.is_manual_gear = False   # back to automatic
+car_controls.manual_gear = 0
 
 for _ in range(20):
     client.setCarControls(car_controls, "Car1")
