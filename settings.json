@@ -26,9 +26,9 @@
     "Car1": {
       "VehicleType": "PhysXCar",
       "PawnPath": "DefaultCar",
-      "X": 0,
+      "X": 2,
       "Y": 0,
-      "Z": -2,
+      "Z": -1.5,
       "Sensors": {
         "Lidar1": {
           "SensorType": 6,
