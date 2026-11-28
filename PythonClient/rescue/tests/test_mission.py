@@ -528,3 +528,34 @@ def test_a_sighting_is_forgotten_after_a_long_gap(mission, monkeypatch):
     seen = iter([person, person] + [[]] * (mod.SIGHTING_GAP_FRAMES + 1) + [person])
     monkeypatch.setattr(FakeDetector, "detect", lambda self, image: next(seen))
     assert all(m.scan() is None for _ in range(mod.SIGHTING_GAP_FRAMES + 4))  # the count started over
+
+
+class StopsShort(FakeClient):
+    """Like AirSim at speed: a move ends with the drone ~4 m short of the target."""
+
+    def moveToPositionAsync(self, x, y, z, v, **kw):
+        fut = super().moveToPositionAsync(x, y, z, v, **kw)
+        d = np.array([x, y, z], float) - self.pos
+        n = np.linalg.norm(d[:2])
+        if n > 6:
+            self.moving = np.array([x, y, z], float) - np.append(d[:2] / n * 4.0, 0)
+        return fut
+
+
+def test_a_lane_that_ends_short_of_its_end_is_done_without_waiting(mission, capsys):
+    mod, cfg = mission
+    from survey_plan import plan_survey
+    plan = plan_survey(cfg)
+    mod.airsim.MultirotorClient = one_drone(StopsShort)
+    try:
+        m = mod.Mission(cfg, plan, detect=True)
+        m.speed = 6.6
+        m.ground_z = GROUND_Z
+        m.detector.detect = lambda image: []          # an empty lane
+        start = m.client.pos.copy()
+        target = start + np.array([30.0, 0, 0])
+        m.sweep(target, 6.6, 0)
+    finally:
+        mod.airsim.MultirotorClient = one_drone(FakeClient)
+    assert "took too long" not in capsys.readouterr().out
+    assert np.linalg.norm(m.client.pos[:2] - target[:2]) == pytest.approx(4.0, abs=0.1)

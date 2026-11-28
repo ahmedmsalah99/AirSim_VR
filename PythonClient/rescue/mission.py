@@ -46,6 +46,8 @@ from survey_plan import (DEFAULT_CONFIG, InfeasiblePlan, detector_scale, focal_p
 
 OUTPUT_DIR = Path(__file__).with_name("output")
 ARRIVE_RADIUS = 1.5
+STILL_MOVE_M = 0.5        # on a lane, moving less than this ...
+STILL_TIME_S = 4.0        # ... for this long means the move has ended: the lane is done
 LANDED_HEIGHT_M = 0.5
 SLOW_DESCENT_M = 1.5      # the last bit of a landing is flown slowly
 FAST_DESCENT_SPEED = 3    # m/s above that
@@ -400,9 +402,20 @@ class Mission:
         c.moveToPositionAsync(*target, speed, yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name)
         deadline = time.time() + 2 * np.linalg.norm(target - self.position()) / speed + 30
         last_report = time.time()
-        while np.linalg.norm(self.position()[:2] - target[:2]) > ARRIVE_RADIUS:
+        # AirSim ends a move when its lookahead point reaches the target, so the drone stops up to
+        # LOOKAHEAD_PER_SPEED * speed short of it (4 m at 6.6 m/s): within that, the lane is done.
+        # Waiting for ARRIVE_RADIUS, it hovered until the lane timed out.
+        done = max(ARRIVE_RADIUS, LOOKAHEAD_PER_SPEED * speed + 0.5)
+        still_since, last_pos = time.time(), self.position()
+        while np.linalg.norm(self.position()[:2] - target[:2]) > done:
             if time.time() > deadline:
                 self.log("WARNING: lane took too long; moving on")
+                break
+            here = self.position()
+            if np.linalg.norm(here - last_pos) > STILL_MOVE_M:
+                still_since, last_pos = time.time(), here
+            elif time.time() - still_since > STILL_TIME_S:
+                self.log(f"stopped {np.linalg.norm(here[:2] - target[:2]):.1f} m short of the lane's end; moving on")
                 break
             candidate = self.scan()
             if time.time() - last_report > REPORT_EVERY_S:
@@ -414,6 +427,7 @@ class Mission:
             self.face(heading)
             c.moveToPositionAsync(*target, speed, yaw_mode=airsim.YawMode(False, heading), vehicle_name=self.name)
             deadline = time.time() + 2 * np.linalg.norm(target - self.position()) / speed + 30
+            still_since, last_pos = time.time(), self.position()
         if self.scans["frames"]:
             self.report_scans()
 
