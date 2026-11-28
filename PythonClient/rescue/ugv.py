@@ -546,7 +546,8 @@ class Ugv:
             self.log(f"WARNING: couldn't move {tag}: is an actor tagged {tag} in the level, with "
                      f"Mobility set to Movable?")
             return False
-        self.log(f"medical kit {tag} placed beside victim {victim['id']} at x={xy[0]:.1f} y={xy[1]:.1f}")
+        self.log(f"medical kit {tag} placed beside victim {victim['id']} at x={xy[0]:.1f} y={xy[1]:.1f} "
+                 f"z={z:.1f} (world NED: negative is up)")
         return True
 
     def check(self):
