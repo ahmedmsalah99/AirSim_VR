@@ -343,6 +343,12 @@ class Ugv:
                     label = f"{lo:g}-{hi:g} m" if hi < 1e9 else f"{lo:g}+ m"
                     self.log(f"  {label:<10} {m.sum():7d}  {band[m].sum():7d}  "
                              f"{q[0]:+.2f} / {q[1]:+.2f} / {q[2]:+.2f} m")
+            ground_band = (rng >= 3) & (rng < 15)
+            if ground_band.sum() > 20:
+                low = float(np.percentile(height[ground_band], 5))   # the lowest hits: the ground
+                self.log(f"  the ground (lowest 5% of the hits 3-15 m away) comes out {low:+.2f} m above the "
+                         f"assumed ground: set ugv.base_height_m to {u['base_height_m'] - low:.2f}"
+                         + ("" if abs(low) > 0.15 else " (or leave it: that's close enough)"))
             if (rng < 1.5).sum() > 0.05 * len(pts):
                 self.log("  WARNING: many points within 1.5 m: the lidar may be hitting the Husky itself "
                          "(e.g. a mesh added as a child actor). Raise the lidar (Z in settings.json) or "

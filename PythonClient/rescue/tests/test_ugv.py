@@ -137,8 +137,8 @@ class SimCar:
         pts = []
         for k in range(len(a)):
             if best[k] < 30:
-                pts += [self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k], self.z - 0.2]
-            pts += [self.x + d[k, 0] * 6, self.y + d[k, 1] * 6, self.z + 0.3]   # the ground
+                pts += [self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k], self.z - 0.8]
+            pts += [self.x + d[k, 0] * 6, self.y + d[k, 1] * 6, self.z + 0.05]  # the ground
         return types.SimpleNamespace(point_cloud=pts)
 
     def simSetObjectPose(self, tag, pose, teleport=True):
@@ -271,6 +271,7 @@ def test_check_reports_points_and_the_steering_sign(ugv_mod, capsys):
     out = capsys.readouterr().out
     assert "points in one sweep" in out
     assert "steering_sign should be 1" in out       # the simulated car turns right for steering > 0
+    assert "set ugv.base_height_m to 0.05" in out   # the simulated ground is 0.05 m below the origin
 
 
 def test_check_says_when_the_husky_doesnt_move(ugv_mod, capsys):

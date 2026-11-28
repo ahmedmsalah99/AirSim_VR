@@ -103,8 +103,8 @@ ugv:                            # the Husky (ugv.py)
   stop_distance_m: 2.0          # stop this far from a victim
   kit_offset_m: 1.0             # the kit goes this far from the victim, on the UGV's side
   home_radius_m: 1.5
-  base_height_m: 0.6            # the UGV's origin above the ground (--check: the ground came out
-                                #   0.33 m below the 0.3 assumed before)
+  base_height_m: 0.0            # the UGV's origin above the ground: ugv.py --check prints the value
+                                #   (0.6 put the ground ~0.65 m high: the lidar mapped it as obstacles)
   obstacle_min_height_m: 0.5    # lidar points this high above the ground and up to ...
   obstacle_max_height_m: 1.0    #   ... this are obstacles; lower is ground, higher passes over the
                                 #   Husky (~0.4 m tall), e.g. branches and eaves. Walls, trunks and

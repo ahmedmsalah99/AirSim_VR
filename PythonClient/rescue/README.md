@@ -87,7 +87,7 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
    ```
    python ugv.py --check
    ```
-   It reads one lidar sweep and prints where the ground comes out. If it's not near 0, change `ugv.base_height_m` by that much. Then it drives for 3 s with the steering at +0.5 and says what `ugv.steering_sign` should be.
+   It reads one lidar sweep, finds the ground in it, and prints the `ugv.base_height_m` to set. If that's wrong, the ground is mapped as obstacles, in rings around the UGV, and it finds itself boxed in. Then it drives for 3 s with the steering at +0.5 and says what `ugv.steering_sign` should be.
 
 **Run:** start the UGV first (ZeroMQ doesn't keep messages for late subscribers), then the drone:
 ```
