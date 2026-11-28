@@ -39,6 +39,8 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_MOVE_M = 0.3      # moving less than this while driving ...
 STUCK_TIME_S = 4.0      # ... for this long is stuck
 REVERSE_TIME_S = 2.0
+LOCAL_GROUND_M = 0.5    # a point's height is measured from the lowest ground within this of it
+CANOPY_SLACK_M = 1.5    # points this far above obstacle height (above the UGV's ground) are ignored
 TIMING_EVERY_S = 10     # log how long a control step takes, this often
 STEADY_DEG = 10      # leaning less than this, it stands steady: a place to right it at ...
 RIGHT_BACK_S = 2.0   # ... from at least this long before it tipped
@@ -195,15 +197,20 @@ class Ugv:
         if pos is None:
             pos, _, _, z = self.state()
         ground_z = z + u["base_height_m"]   # NED: down is +z
-        height = ground_z - pts[:, 2]
-        # Obstacles stick up from the ground; a drop (an edge, a ditch) shows as hits well below it.
-        obstacles = pts[((height >= u["obstacle_min_height_m"]) & (height <= u["obstacle_max_height_m"]))
-                        | (height < -u["drop_m"]), :2]
+        # Leave out what's far above the UGV (canopy, roofs): it isn't ground and it can't block it.
+        pts = pts[ground_z - pts[:, 2] <= u["obstacle_max_height_m"] + CANOPY_SLACK_M]
+        if not len(pts):
+            return fetch
+        up = -pts[:, 2]
+        # Terrain first: the height map (lowest surface seen in each cell) also marks steps and
+        # slopes too steep to drive (a ramp, a bank, a kerb, an edge) as obstacles.
+        self.grid.update_ground(pts[:, :2], up, u["max_step_m"], u["max_slope_deg"])
+        # Obstacles stick up from the ground around them: obstacle_min..max_height_m above the
+        # lowest ground within LOCAL_GROUND_M. (Measured from the ground under the UGV, as before,
+        # uphill ground ahead counted as obstacles and downhill ground as drops, on this hilly map.)
+        above = up - self.grid.local_ground(pts[:, :2], LOCAL_GROUND_M)
+        obstacles = pts[(above >= u["obstacle_min_height_m"]) & (above <= u["obstacle_max_height_m"]), :2]
         self.grid.update(pos, obstacles)
-        # Terrain: every surface point up to obstacle height goes into the height map, which marks
-        # steps and slopes too steep to drive (a ramp, a bank, a kerb) as obstacles.
-        surface = height <= u["obstacle_max_height_m"]
-        self.grid.update_ground(pts[surface, :2], -pts[surface, 2], u["max_step_m"], u["max_slope_deg"])
         return fetch
 
     def check_victims(self):

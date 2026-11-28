@@ -111,7 +111,6 @@ ugv:                            # the Husky (ugv.py)
   obstacle_max_height_m: 1.0    #   ... this are obstacles; lower is ground, higher passes over the
                                 #   Husky (~0.4 m tall), e.g. branches and eaves. Walls, trunks and
                                 #   people still show between the two
-  drop_m: 0.6                   # lidar points this far below the ground are a drop (edge, ditch)
   area_margin_m: 5              # the UGV stays within the search area plus this
   max_step_m: 0.25              # the ground changing more than this within 0.5 m is a step ...
   max_slope_deg: 22             #   ... and rising more than this over 1 m a slope too steep: obstacles

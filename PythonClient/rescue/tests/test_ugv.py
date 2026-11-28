@@ -137,8 +137,9 @@ class SimCar:
             best = np.minimum(best, dist.min(axis=1))
         pts = []
         for k in range(len(a)):
-            if best[k] < 30:
-                pts += [self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k], self.z - 0.8]
+            if best[k] < 30:   # a vertical surface: hit low and high, as the lidar's channels do
+                hx, hy = self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k]
+                pts += [hx, hy, self.z - 0.1, hx, hy, self.z - 0.8]
             pts += [self.x + d[k, 0] * 6, self.y + d[k, 1] * 6, self.z + 0.05]  # the ground
         return types.SimpleNamespace(point_cloud=pts)
 
@@ -328,8 +329,8 @@ def test_boxed_in_is_explained(ugv_mod):
 def test_branches_above_the_husky_are_not_obstacles(ugv_mod):
     u, car = make(ugv_mod, [], [])
     ground = car.z + u.u["base_height_m"]          # NED: up is -z
-    pts = [5, 0, ground - 2.0,                     # a branch 2 m up: the Husky passes under
-           6, 0, ground - 0.8]                     # a trunk or wall at 0.8 m: an obstacle
+    pts = [5, 0, ground, 5, 0, ground - 2.0,       # the ground, and a branch 2 m above it
+           6, 0, ground, 6, 0, ground - 0.8]       # the ground, and a trunk or wall at 0.8 m
     car.getLidarData = lambda **k: types.SimpleNamespace(point_cloud=pts)
     u.sense()
     occ = u.grid.occupied()
@@ -417,15 +418,21 @@ def test_a_tip_over_is_righted_and_the_trip_goes_on(ugv_mod, capsys):
     assert len(u.served) == 1
 
 
-def test_a_drop_is_an_obstacle(ugv_mod):
+def test_sloping_ground_is_not_an_obstacle_but_an_edge_is(ugv_mod):
     u, car = make(ugv_mod, [], [])
     ground = car.z + u.u["base_height_m"]
-    pts = [6, 0, ground + 2.0,      # 2 m below the ground: past an edge
-           4, 0, ground + 0.2]      # a little lower ground: a gentle slope
+    pts = []
+    for x in np.arange(2, 12, 0.1):
+        for y in np.arange(-1, 1.01, 0.1):
+            if x < 8:   # uphill, 8 deg: 0.3-1.0 m above the UGV's ground from 2 m out
+                pts += [x, y, ground - np.tan(np.radians(8)) * x]
+            else:       # then the ground falls away 2 m: an edge
+                pts += [x, y, ground + 2.0]
     car.getLidarData = lambda **k: types.SimpleNamespace(point_cloud=pts)
     u.sense()
     occ = u.grid.occupied()
-    assert occ[tuple(u.grid.to_cell((6, 0)))] and not occ[tuple(u.grid.to_cell((4, 0)))]
+    assert not occ[tuple(u.grid.to_cell((5, 0)))]          # uphill ground, 0.7 m above the UGV's: drivable
+    assert occ[tuple(u.grid.to_cell((7.9, 0)))]            # the top of the edge: blocked
 
 
 def test_the_ugv_stays_inside_the_search_area(ugv_mod):

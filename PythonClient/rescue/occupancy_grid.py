@@ -112,6 +112,30 @@ class OccupancyGrid:
     def occupied(self):
         return (self.logodds > L_OCCUPIED) | self.steep
 
+    def local_ground(self, xy, radius_m=0.5):
+        """For each point xy: the lowest ground height seen within radius_m of it (nan if none)."""
+        cells = self.to_cell(np.asarray(xy, float).reshape(-1, 2))
+        out = np.full(len(cells), np.nan, np.float32)
+        ok = self.inside(cells)
+        if not ok.any():
+            return out
+        r = max(1, int(round(radius_m / self.res)))
+        i0, j0 = np.maximum(cells[ok].min(axis=0) - r, 0)
+        i1, j1 = np.minimum(cells[ok].max(axis=0) + r + 1, self.n)
+        win = self.ground[i0:i1, j0:j1]
+        low = win.copy()
+        for di in range(-r, r + 1):
+            for dj in range(-r, r + 1):
+                if di == 0 and dj == 0:
+                    continue
+                shifted = np.full(win.shape, np.nan, np.float32)
+                shifted[max(di, 0):win.shape[0] + min(di, 0) or None, max(dj, 0):win.shape[1] + min(dj, 0) or None] = \
+                    win[max(-di, 0):win.shape[0] + min(-di, 0) or None, max(-dj, 0):win.shape[1] + min(-dj, 0) or None]
+                low = np.fmin(low, shifted)
+        c = cells[ok]
+        out[ok] = low[c[:, 0] - i0, c[:, 1] - j0]
+        return out
+
     def update_ground(self, xy, up, step_m, max_slope_deg):
         """Add surface points (xy, and height up in m, positive up) to the height map and mark
         cells where the ground rises more than step_m within 0.5 m (the top of a kerb, a ramp's
