@@ -480,3 +480,16 @@ def test_a_kerb_is_an_obstacle():
     _terrain(g, lambda x, y: np.where(x > 6, 0.3, 0.0))
     assert g.steep[tuple(g.to_cell((6.3, 0)))]              # the top edge
     assert not g.steep[tuple(g.to_cell((5.5, 0)))] and not g.steep[tuple(g.to_cell((9, 0)))]
+
+
+def test_next_to_the_victim_a_long_way_round_counts_as_arrived(ugv_mod, capsys):
+    # The victim stands in a pocket open only at the far side: from the near side the ring around
+    # them is blocked, and the only spot within 2 m is a long way round.
+    pocket = [(20 + 2.2 * math.cos(a), 2.2 * math.sin(a), 0.3)
+              for a in np.linspace(math.radians(-150), math.radians(150), 25)]
+    u, car = make(ugv_mod, pocket, [(0.0, victim(1, 20, 0))])
+    u.grid = OccupancyGrid((0, 0), 60, 0.25)
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "close enough" in out and "MedKit_1 placed beside victim 1" in out
+    assert car.collisions == 0
