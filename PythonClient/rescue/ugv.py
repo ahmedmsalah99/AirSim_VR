@@ -37,6 +37,8 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
 STUCK_TIME_S = 3.0      # ... for this long
 REVERSE_TIME_S = 2.0
+REVERSE_ON = math.radians(110)   # a path target this far off the nose is driven to in reverse ...
+REVERSE_OFF = math.radians(80)   # ... until it's back within this of the nose
 PATH_COLOR = [0.1, 0.4, 1.0, 1.0]
 KIT_HEIGHT_M = 0.15     # the kit's origin above the ground
 
@@ -110,7 +112,7 @@ class Ugv:
         self.radius = u["robot_radius_m"] + u["safety_margin_m"]
         self.queue, self.served, self.failed, self.seen_ids = [], [], [], set()
         self.kits = list(u["medkits"])
-        self.path, self.last_plan, self.squeezing = None, -math.inf, False
+        self.path, self.last_plan, self.squeezing, self.backing = None, -math.inf, False, False
         self.t0 = self.now()
 
     # ---- bookkeeping -------------------------------------------------------------------
@@ -221,18 +223,33 @@ class Ugv:
             pass
 
     def steer(self, pos, heading, speed):
-        """Pure pursuit along self.path: throttle and steering for this step."""
+        """Pure pursuit along self.path: throttle (< 0 in reverse), steering and brake for this step.
+
+        The Husky steers like a car and can't turn on the spot, so a path that starts behind it
+        is driven in reverse (with the rear as the front) until it's ahead again: a forward
+        U-turn in a tight spot ran it into the fence and the house beside its start."""
         u = self.u
         path = self.path
         target = lookahead_point(path, pos, u["lookahead_m"])
         d = np.asarray(target) - pos
-        alpha = wrap(math.atan2(d[1], d[0]) - heading)  # > 0: the target is to the right (NED)
-        steering = float(np.clip(u["steering_gain"] * alpha * u["steering_sign"], -1, 1))
-        want = u["max_speed"] if abs(alpha) < 0.5 else u["slow_speed"]
+        bearing = math.atan2(d[1], d[0])
+        alpha = wrap(bearing - heading)  # > 0: the target is to the right (NED)
+        if self.backing and abs(alpha) < REVERSE_OFF:
+            self.backing = False
+        elif not self.backing and abs(alpha) > REVERSE_ON:
+            self.backing = True
+        if self.backing:
+            # Aim the rear at the target. Reversing, the car turns the other way for a steering.
+            alpha = wrap(bearing - heading - math.pi)
+            steering = float(np.clip(-u["steering_gain"] * alpha * u["steering_sign"], -1, 1))
+        else:
+            steering = float(np.clip(u["steering_gain"] * alpha * u["steering_sign"], -1, 1))
+        want = u["max_speed"] if abs(alpha) < 0.5 and not self.backing else u["slow_speed"]
         want = min(want, max(u["slow_speed"], np.linalg.norm(np.asarray(path[-1]) - pos) / 2))
-        throttle = float(np.clip(0.3 + 0.4 * (want - speed), 0, 1)) if speed < want + 0.3 else 0.0
-        brake = 0.0 if speed < want + 0.3 else 0.3
-        return throttle, steering, brake
+        mag = abs(speed)
+        throttle = float(np.clip(0.3 + 0.4 * (want - mag), 0, 1)) if mag < want + 0.3 else 0.0
+        brake = 0.0 if mag < want + 0.3 else 0.3
+        return (-throttle if self.backing else throttle), steering, brake
 
     def drive_to(self, goal, tolerance, what, interrupt=None):
         """Drive to within tolerance of goal (local xy). Returns "arrived", "interrupted" (when
@@ -243,6 +260,7 @@ class Ugv:
         pos = self.state()[0]
         deadline = start + np.linalg.norm(goal - pos) / u["slow_speed"] * 3 + 60
         self.path, self.last_plan, slow_since, no_path_since = None, -math.inf, None, None
+        self.backing = False
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
             pos, heading, speed, _ = self.state()
@@ -274,25 +292,37 @@ class Ugv:
                 continue
             no_path_since = None
             throttle, steering, brake = self.steer(pos, heading, speed)
-            # Stuck: pushing but not moving (against something the lidar misses). Back up.
-            if throttle > 0 and speed < STUCK_SPEED:
+            # Stuck: pushing but not moving (against something the lidar misses). Back off the
+            # other way, with the steering the other way, and replan.
+            if throttle != 0 and abs(speed) < STUCK_SPEED:
                 slow_since = slow_since or self.now()
                 if self.now() - slow_since > STUCK_TIME_S:
-                    self.log("stuck; backing up")
-                    self.reverse(-steering)
-                    slow_since, self.path = None, None
+                    self.log(f"stuck {'reversing' if throttle < 0 else 'going forward'} "
+                             f"({self.touching()}); backing off the other way")
+                    self.escape(-1 if throttle > 0 else 1, -steering)
+                    slow_since, self.path, self.last_plan = None, None, -math.inf
                     continue
             else:
                 slow_since = None
             self.controls(throttle, steering, brake)
             self.sleep(u["control_period_s"])
 
-    def reverse(self, steering):
+    def escape(self, direction, steering):
+        """Drive REVERSE_TIME_S the given way (1 forward, -1 back; auto gear: a negative throttle
+        reverses), then stop."""
         end = self.now() + REVERSE_TIME_S
         while self.now() < end:
-            self.controls(throttle=-0.5, steering=steering)  # auto gear: negative throttle reverses
+            self.controls(throttle=0.5 * direction, steering=steering)
             self.sleep(self.u["control_period_s"])
         self.stop()
+
+    def touching(self):
+        """What AirSim last saw the UGV collide with, for the log."""
+        try:
+            info = self.client.simGetCollisionInfo(vehicle_name=self.name)
+            return f"last collision: {info.object_name}" if info.has_collided else "no collision reported"
+        except Exception:  # noqa: BLE001
+            return "collision info unavailable"
 
     # ---- the job -----------------------------------------------------------------------
 
@@ -358,7 +388,7 @@ class Ugv:
         for _ in range(30):
             self.controls(throttle=0.4, steering=0.5)
             self.sleep(0.1)
-            top = max(top, self.state()[2])
+            top = max(top, abs(self.state()[2]))
         self.stop()
         new_pos, new_heading, _, _ = self.state()
         moved = float(np.linalg.norm(new_pos - pos))

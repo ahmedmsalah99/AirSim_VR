@@ -117,7 +117,7 @@ class SimCar:
     def getCarState(self, vehicle_name=""):
         h = self.yaw / 2
         k = types.SimpleNamespace(position=Vec(self.x, self.y, self.z), orientation=Quat(math.cos(h), 0, 0, math.sin(h)))
-        return types.SimpleNamespace(kinematics_estimated=k, speed=abs(self.v))
+        return types.SimpleNamespace(kinematics_estimated=k, speed=self.v)   # signed, like AirSim's
 
     def getLidarData(self, lidar_name="", vehicle_name=""):
         """A 360 deg sweep at 1 m above the ground: hits on the obstacles within 30 m, plus a
@@ -147,6 +147,9 @@ class SimCar:
 
     def simPlotLineStrip(self, *a, **k):
         pass
+
+    def simGetCollisionInfo(self, vehicle_name=""):
+        return types.SimpleNamespace(has_collided=self.collisions > 0, object_name="Tree")
 
 
 class Inbox:
@@ -315,3 +318,19 @@ def test_branches_above_the_husky_are_not_obstacles(ugv_mod):
     occ = u.grid.occupied()
     assert not occ[tuple(u.grid.to_cell((5, 0)))]
     assert occ[tuple(u.grid.to_cell((6, 0)))]
+
+
+def test_a_victim_behind_in_a_tight_spot_is_reached_in_reverse(ugv_mod, capsys):
+    # Facing north between a wall 2 m to the left and one 2 m to the right; the victim is behind.
+    walls = [(x, y, 0.3) for x in np.arange(-6, 6.01, 0.5) for y in (-2.0, 2.0)]
+    u, car = make(ugv_mod, walls, [(0.0, victim(1, -14, 0))])
+    seen_reverse = []
+    original = u.controls
+
+    def record(throttle=0.0, steering=0.0, brake=0.0):
+        seen_reverse.append(throttle < 0)
+        original(throttle, steering, brake)
+    u.controls = record
+    u.run(once=True)
+    assert len(u.served) == 1 and car.collisions == 0
+    assert any(seen_reverse)
