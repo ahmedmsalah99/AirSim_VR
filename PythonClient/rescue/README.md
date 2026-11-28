@@ -94,6 +94,7 @@ The camera looks forward along the lane, `camera.tilt_deg` below the horizon (90
 python ugv.py          # terminal 1: waits at home
 python mission.py      # terminal 2
 ```
+To test the UGV alone, without the drone: `python ugv.py --victim Victim_01` drives to that tagged person (at their true position), drops a kit, comes home and exits. Repeat `--victim` for several.
 What it does:
 1. **Queue:** each confirmed victim is queued. Ids already seen, and anyone within 3 m of a known victim, are ignored. At home it waits; when a victim arrives it drives to the nearest queued one.
 2. **Mapping, with no prior map:** every lidar sweep updates a 2D occupancy grid (`map_resolution_m` cells, log-odds). A point between `obstacle_min_height_m` and `obstacle_max_height_m` above the ground marks its cell occupied, and the cells its ray passed through get freer. Lower points are ground; higher ones (branches, eaves) pass over the Husky, so only 0.5–1.0 m counts. Points more than `drop_m` *below* the ground are a drop (an edge, a ditch) and are obstacles too. The UGV also stays within the search area plus `area_margin_m`. The UGV's position comes from AirSim, so this is mapping with a known pose: the map is built only from what the lidar has seen.

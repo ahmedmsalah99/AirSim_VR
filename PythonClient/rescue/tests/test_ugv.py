@@ -149,6 +149,10 @@ class SimCar:
     def simPlotLineStrip(self, *a, **k):
         pass
 
+    def simGetObjectPose(self, tag):
+        x, y = getattr(self, "actors", {}).get(tag, (float("nan"), float("nan")))
+        return types.SimpleNamespace(position=Vec(x, y, -0.9))
+
     def simGetVehiclePose(self, vehicle_name=""):
         return types.SimpleNamespace(position=Vec(self.x, self.y, self.z))
 
@@ -433,3 +437,15 @@ def test_the_ugv_stays_inside_the_search_area(ugv_mod):
     v = mod.Ugv(cfg, client=car, subscriber=u.subscriber)
     lo, hi = v.grid.bounds
     assert lo == pytest.approx([-25, -10]) and hi == pytest.approx([35, 10])   # area + 5 m, local = world here
+
+
+def test_a_tagged_victim_is_driven_to_without_the_drone(ugv_mod, capsys):
+    u, car = make(ugv_mod, [(8, 0, 0.6)], [])
+    car.actors = {"Victim_01": (16, 2)}
+    u.queue_actor("Victim_01")
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "Victim_01 queued directly" in out and "MedKit_1 placed beside victim Victim_01" in out
+    assert [v["id"] for v in u.served] == ["Victim_01"] and car.collisions == 0
+    with pytest.raises(SystemExit, match="Nobody"):
+        u.queue_actor("Nobody")

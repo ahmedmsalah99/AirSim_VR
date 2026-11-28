@@ -3,6 +3,7 @@
 Start Play in Unreal, then (before or alongside mission.py):
 
     python ugv.py
+    python ugv.py --victim Victim_01   # test: drive to a tagged person without the drone
 
 It listens for confirmed victims on the drone's ZeroMQ topic (publish in
 config.yaml) and keeps a queue:
@@ -515,6 +516,17 @@ class Ugv:
         pos = self.state()[0]
         return min(self.queue, key=lambda v: np.linalg.norm(v["local"] - pos))
 
+    def queue_actor(self, tag):
+        """Queue the actor tagged tag (a person placed in the level) as a victim, at its true
+        position, without waiting for the drone."""
+        p = self.client.simGetObjectPose(tag).position
+        if math.isnan(p.x_val):
+            raise SystemExit(f"no actor tagged {tag!r} in the level (Details > Actor > Tags)")
+        # The actor's origin may be at its waist; the kit goes on the ground the UGV stands on.
+        world = np.array([p.x_val, p.y_val, self.spawn[2] + self.state()[3] + self.u["base_height_m"]])
+        self.queue.append({"id": tag, "world": world, "local": self.to_local(world)})
+        self.log(f"{tag} queued directly at x={world[0]:.1f} y={world[1]:.1f} (not waiting for the drone)")
+
     def run(self, once=False):
         """Serve victims until Ctrl+C (or, with once, until home with an empty queue)."""
         c, u = self.client, self.u
@@ -566,12 +578,22 @@ def main():
     parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG)
     parser.add_argument("--check", action="store_true",
                         help="check the lidar heights and the steering direction (drives 3 s), then exit")
+    parser.add_argument("--victim", metavar="TAG", action="append",
+                        help="test without the drone: drive to this tagged person (repeat for several), "
+                             "drop the kits, come home and exit")
     args = parser.parse_args()
     cfg = load_config(args.config)
     if "ugv" not in cfg:
         sys.exit("config.yaml has no ugv section")
     ugv = Ugv(cfg)
-    ugv.check() if args.check else ugv.run()
+    if args.check:
+        ugv.check()
+    elif args.victim:
+        for tag in args.victim:
+            ugv.queue_actor(tag)
+        ugv.run(once=True)
+    else:
+        ugv.run()
 
 
 if __name__ == "__main__":
