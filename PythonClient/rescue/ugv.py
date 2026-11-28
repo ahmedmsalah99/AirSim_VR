@@ -37,11 +37,16 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
 STUCK_TIME_S = 3.0      # ... for this long
 REVERSE_TIME_S = 2.0
+TIPPED_DEG = 60
 BUMP_ARRIVE_M = 1.5             # stuck within stop_distance + this of the goal counts as arrived
-REVERSE_ON = math.radians(110)   # a path target this far off the nose is driven to in reverse ...
-REVERSE_OFF = math.radians(80)   # ... until it's back within this of the nose
+REVERSE_ON = math.radians(110)   # a path target this far off the nose starts a multi-point turn ...
+REVERSE_OFF = math.radians(30)   # ... until it's within this of the nose
 PATH_COLOR = [0.1, 0.4, 1.0, 1.0]
 KIT_HEIGHT_M = 0.15     # the kit's origin above the ground
+
+
+class TippedOver(Exception):
+    pass
 
 
 def yaw_of(q):
@@ -114,6 +119,7 @@ class Ugv:
         self.queue, self.served, self.failed, self.seen_ids = [], [], [], set()
         self.kits = list(u["medkits"])
         self.path, self.last_plan, self.squeezing, self.backing = None, -math.inf, False, False
+        self.turn_leg = "back"
         self.t0 = self.now()
 
     # ---- bookkeeping -------------------------------------------------------------------
@@ -140,6 +146,13 @@ class Ugv:
         s = self.client.getCarState(vehicle_name=self.name)
         p = s.kinematics_estimated.position
         return np.array([p.x_val, p.y_val]), yaw_of(s.kinematics_estimated.orientation), s.speed, p.z_val
+
+    def tilt_deg(self):
+        """How far the UGV leans from upright (deg): over ~60 it has tipped over."""
+        q = self.client.getCarState(vehicle_name=self.name).kinematics_estimated.orientation
+        # The body's down axis in the world: its z component is cos(tilt).
+        down_z = 1 - 2 * (q.x_val ** 2 + q.y_val ** 2)
+        return math.degrees(math.acos(max(-1.0, min(1.0, down_z))))
 
     def sense(self):
         """Add the latest lidar sweep to the map."""
@@ -231,9 +244,10 @@ class Ugv:
     def steer(self, pos, heading, speed):
         """Pure pursuit along self.path: throttle (< 0 in reverse), steering and brake for this step.
 
-        The Husky steers like a car and can't turn on the spot, so a path that starts behind it
-        is driven in reverse (with the rear as the front) until it's ahead again: a forward
-        U-turn in a tight spot ran it into the fence and the house beside its start."""
+        The Husky steers like a car and can't turn on the spot, so when the path starts behind it
+        it makes a 3-point turn: it reverses on full lock until the path is ahead, then goes on
+        forwards. A forward U-turn in a tight spot ran it into the fence and the house beside its
+        start."""
         u = self.u
         path = self.path
         target = lookahead_point(path, pos, u["lookahead_m"])
@@ -242,12 +256,24 @@ class Ugv:
         alpha = wrap(bearing - heading)  # > 0: the target is to the right (NED)
         if self.backing and abs(alpha) < REVERSE_OFF:
             self.backing = False
-        elif not self.backing and abs(alpha) > REVERSE_ON:
-            self.backing = True
+        elif not self.backing and (abs(alpha) > REVERSE_ON
+                                   or (abs(alpha) > REVERSE_OFF and self.close(pos, heading))):
+            # Far off the nose, or turning with something close ahead: turn on the spot instead.
+            self.backing, self.turn_leg = True, "back"
+        forward = True
         if self.backing:
-            # Aim the rear at the target. Reversing, the car turns the other way for a steering.
-            alpha = wrap(bearing - heading - math.pi)
-            steering = float(np.clip(-u["steering_gain"] * alpha * u["steering_sign"], -1, 1))
+            # A multi-point turn, until the target is within REVERSE_OFF of the nose: back up on
+            # full lock so the nose swings round towards it (reversing, a car turns the other way
+            # for the same steering) until something's close behind, then forward on the opposite
+            # lock until something's close in front, and so on. (Reversing the whole way, rear
+            # first, took it 13 m backwards into a dip it couldn't get out of.)
+            side = float(np.sign(alpha)) or 1.0
+            if self.turn_leg == "back" and self.close(pos, heading + math.pi):
+                self.turn_leg = "forward"
+            elif self.turn_leg == "forward" and self.close(pos, heading):
+                self.turn_leg = "back"
+            forward = self.turn_leg == "forward"
+            steering = side * u["steering_sign"] * (1.0 if forward else -1.0)
         else:
             steering = float(np.clip(u["steering_gain"] * alpha * u["steering_sign"], -1, 1))
         want = u["max_speed"] if abs(alpha) < 0.5 and not self.backing else u["slow_speed"]
@@ -255,7 +281,18 @@ class Ugv:
         mag = abs(speed)
         throttle = float(np.clip(0.3 + 0.4 * (want - mag), 0, 1)) if mag < want + 0.3 else 0.0
         brake = 0.0 if mag < want + 0.3 else 0.3
-        return (-throttle if self.backing else throttle), steering, brake
+        return (throttle if forward else -throttle), steering, brake
+
+    def close(self, pos, direction, clearance=0.6):
+        """Whether the map has an obstacle within clearance of the UGV's body (robot_radius_m)
+        in direction (rad, NED)."""
+        d = np.array([math.cos(direction), math.sin(direction)])
+        side = np.array([-d[1], d[0]])
+        reach = self.u["robot_radius_m"] + clearance
+        pts = [pos + d * a + side * w for a in np.arange(0.3, reach + 0.01, 0.25) for w in (-0.4, 0, 0.4)]
+        cells = self.grid.to_cell(pts)
+        cells = cells[self.grid.inside(cells)]
+        return bool(self.grid.occupied()[cells[:, 0], cells[:, 1]].any()) if len(cells) else False
 
     def drive_to(self, goal, tolerance, what, interrupt=None):
         """Drive to within tolerance of goal (local xy). Returns "arrived", "interrupted" (when
@@ -270,6 +307,12 @@ class Ugv:
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
             pos, heading, speed, _ = self.state()
+            tilt = self.tilt_deg()
+            if tilt > TIPPED_DEG:
+                self.stop()
+                self.log(f"WARNING: tipped over ({tilt:.0f} deg from upright) on the way to {what}; "
+                         f"stopping (restart Play to put it back)")
+                raise TippedOver(what)
             if np.linalg.norm(goal - pos) <= tolerance + 0.3:
                 self.stop()
                 return "arrived"
@@ -330,8 +373,13 @@ class Ugv:
         self.grid.mark([front + side * w for w in np.arange(-0.5, 0.51, 0.25)])
 
     def escape(self, direction, steering):
-        """Drive REVERSE_TIME_S the given way (1 forward, -1 back; auto gear: a negative throttle
-        reverses), then stop."""
+        """Drive REVERSE_TIME_S the given way (1 forward, -1 back), then stop; not if the map has
+        something close that way."""
+        pos, heading, _, _ = self.state()
+        if self.close(pos, heading + (0.0 if direction > 0 else math.pi)):
+            self.log("  something close that way too; not moving, replanning")
+            self.stop()
+            return
         end = self.now() + REVERSE_TIME_S
         while self.now() < end:
             self.controls(throttle=0.5 * direction, steering=steering)
@@ -467,6 +515,9 @@ class Ugv:
                 self.sleep(u["control_period_s"])
         except KeyboardInterrupt:
             self.log("stopped by user")
+        except TippedOver:
+            self.log(f"{len(self.served)} victim(s) served before it tipped over; "
+                     f"{len(self.queue)} still waiting")
         finally:
             try:
                 self.stop()

@@ -321,7 +321,7 @@ def test_branches_above_the_husky_are_not_obstacles(ugv_mod):
     assert occ[tuple(u.grid.to_cell((6, 0)))]
 
 
-def test_a_victim_behind_in_a_tight_spot_is_reached_in_reverse(ugv_mod, capsys):
+def test_a_victim_behind_in_a_tight_spot_is_reached_with_a_3_point_turn(ugv_mod, capsys):
     # Facing north between a wall 2 m to the left and one 2 m to the right; the victim is behind.
     walls = [(x, y, 0.3) for x in np.arange(-6, 6.01, 0.5) for y in (-2.0, 2.0)]
     u, car = make(ugv_mod, walls, [(0.0, victim(1, -14, 0))])
@@ -335,6 +335,11 @@ def test_a_victim_behind_in_a_tight_spot_is_reached_in_reverse(ugv_mod, capsys):
     u.run(once=True)
     assert len(u.served) == 1 and car.collisions == 0
     assert any(seen_reverse)
+    longest = run = 0
+    for r in seen_reverse:
+        run = run + 1 if r else 0
+        longest = max(longest, run)
+    assert longest * DT < 4                             # short reversing legs, not the whole way back
 
 
 def test_something_the_lidar_misses_is_bumped_once_marked_and_driven_around(ugv_mod, capsys):
@@ -360,3 +365,18 @@ def test_reverse_uses_the_reverse_gear(ugv_mod):
     assert car.cmd.throttle < 0 and car.cmd.is_manual_gear and car.cmd.manual_gear == -1
     u.controls(throttle=0.5)
     assert not car.cmd.is_manual_gear and car.cmd.manual_gear == 0
+
+
+def test_tipping_over_is_reported_and_stops_the_run(ugv_mod, capsys):
+    u, car = make(ugv_mod, [], [(0.0, victim(1, 20, 0))])
+    real = car.getCarState
+
+    def on_its_side(vehicle_name=""):
+        s = real(vehicle_name)
+        if car.t > 2:   # rolled 90 deg about its x axis
+            s.kinematics_estimated.orientation = Quat(math.cos(math.pi / 4), math.sin(math.pi / 4), 0, 0)
+        return s
+    car.getCarState = on_its_side
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "tipped over (90 deg" in out and not u.served
