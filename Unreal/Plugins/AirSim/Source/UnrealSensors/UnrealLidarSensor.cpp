@@ -134,7 +134,10 @@ bool UnrealLidarSensor::shootLaser(const msr::airlib::Pose& lidar_pose, const ms
     Vector3r end = VectorMath::rotateVector(VectorMath::front(), ray_q_w, true) * params.range + start;
    
     FHitResult hit_result = FHitResult(ForceInit);
-    bool is_hit = UAirBlueprintLib::GetObstacle(actor_, ned_transform_->fromLocalNed(start), ned_transform_->fromLocalNed(end), hit_result, actor_, ECC_Visibility);
+    // Trace on the Vehicle channel, not Visibility: the laser then hits exactly what a vehicle
+    // collides with. Many trees and foliage block vehicles but let Visibility traces through, so
+    // the lidar missed them and the UGV drove into them.
+    bool is_hit = UAirBlueprintLib::GetObstacle(actor_, ned_transform_->fromLocalNed(start), ned_transform_->fromLocalNed(end), hit_result, actor_, ECC_Vehicle);
 
     if (is_hit)
     {
