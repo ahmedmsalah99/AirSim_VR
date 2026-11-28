@@ -194,3 +194,52 @@ class OccupancyGrid:
         if not all(self.inside(c) for c in cells):
             return True
         return any(not self._line_free(a, b, blocked) for a, b in zip(cells, cells[1:]))
+
+    # ---- diagnosis ---------------------------------------------------------------------
+
+    def goal_blocked(self, goal_xy, radius_m, tolerance_m):
+        """Whether every cell within tolerance_m of the goal is blocked."""
+        blocked = self.blocked(radius_m)
+        gi, gj = self.to_cell(goal_xy)
+        r = int(math.ceil(tolerance_m / self.res))
+        i0, i1, j0, j1 = max(gi - r, 0), min(gi + r + 1, self.n), max(gj - r, 0), min(gj + r + 1, self.n)
+        ii, jj = np.mgrid[i0:i1, j0:j1]
+        near = (ii - gi) ** 2 + (jj - gj) ** 2 <= r * r
+        return bool(blocked[i0:i1, j0:j1][near].all()) if near.any() else True
+
+    def enclosed(self, start_xy, radius_m, window_m=15.0):
+        """Whether the robot at start_xy is boxed in: no way out to the edge of a window_m square
+        around it (blocked by obstacles grown by radius_m)."""
+        blocked = self.blocked(radius_m)
+        si, sj = self.to_cell(start_xy)
+        r = int(math.ceil(radius_m / self.res))
+        blocked[max(si - r, 0):si + r + 1, max(sj - r, 0):sj + r + 1] = False
+        w = int(window_m / 2 / self.res)
+        seen, todo = {(si, sj)}, [(si, sj)]
+        while todo:
+            i, j = todo.pop()
+            if abs(i - si) >= w or abs(j - sj) >= w:
+                return False
+            for di, dj, _ in NEIGHBOURS:
+                c = (i + di, j + dj)
+                if c not in seen and 0 <= c[0] < self.n and 0 <= c[1] < self.n and not blocked[c]:
+                    seen.add(c)
+                    todo.append(c)
+        return True
+
+    def picture(self, radius_m, marks, margin_m=12.0, scale=4):
+        """A BGR image of the map around the marks [(xy, (b, g, r))]: obstacles black, grown
+        obstacles grey, seen-free white, unknown light grey. North (+x) is up, east (+y) right."""
+        pts = self.to_cell([m[0] for m in marks])
+        m = int(margin_m / self.res)
+        i0, j0 = np.maximum(pts.min(axis=0) - m, 0)
+        i1, j1 = np.minimum(pts.max(axis=0) + m + 1, self.n)
+        img = np.full((i1 - i0, j1 - j0, 3), 200, np.uint8)
+        img[self.logodds[i0:i1, j0:j1] < 0] = 255
+        img[self.blocked(radius_m)[i0:i1, j0:j1]] = 140
+        img[self.occupied()[i0:i1, j0:j1]] = 0
+        for (xy, color) in marks:
+            i, j = self.to_cell(xy)
+            img[max(i - 2 - i0, 0):i + 3 - i0, max(j - 2 - j0, 0):j + 3 - j0] = color
+        img = img[::-1]  # rows: north up
+        return np.kron(img, np.ones((scale, scale, 1), np.uint8))
