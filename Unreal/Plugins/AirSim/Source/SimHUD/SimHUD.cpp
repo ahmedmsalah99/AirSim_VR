@@ -340,8 +340,17 @@ void ASimHUD::initializeSubWindows()
 
             const auto& subwindow_setting = AirSimSettings::singleton().subwindow_settings.at(window_index);
 
-            if (vehicle_sim_api->getCamera(subwindow_setting.camera_name) != nullptr)
-                subwindow_cameras_[subwindow_setting.window_index] = vehicle_sim_api->getCamera(subwindow_setting.camera_name);
+            // A window can show another vehicle's camera ("VehicleName"); by default, the FPV vehicle's.
+            auto window_vehicle = subwindow_setting.vehicle_name.empty() ? vehicle_sim_api
+                : simmode_->getVehicleSimApi(subwindow_setting.vehicle_name);
+            if (window_vehicle == nullptr) {
+                UAirBlueprintLib::LogMessageString("VehicleName in <SubWindows> element in settings.json is invalid: ",
+                    subwindow_setting.vehicle_name, LogDebugLevel::Failure);
+                continue;
+            }
+
+            if (window_vehicle->getCamera(subwindow_setting.camera_name) != nullptr)
+                subwindow_cameras_[subwindow_setting.window_index] = window_vehicle->getCamera(subwindow_setting.camera_name);
             else
                 UAirBlueprintLib::LogMessageString("CameraID in <SubWindows> element in settings.json is invalid",
                     std::to_string(window_index), LogDebugLevel::Failure);

@@ -62,6 +62,13 @@
       "CameraName": "bottom_center",
       "ImageType": 0,
       "Visible": true
+    },
+    {
+      "WindowID": 1,
+      "CameraName": "front_center",
+      "VehicleName": "Car1",
+      "ImageType": 0,
+      "Visible": true
     }
   ]
 }
