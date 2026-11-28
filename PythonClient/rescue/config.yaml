@@ -99,7 +99,7 @@ ugv:                            # the Husky (ugv.py)
   lookahead_m: 2.5              # pure pursuit
   steering_gain: 1.2            # steering per radian of heading error
   steering_sign: 1              # -1 if the Husky turns the wrong way
-  robot_radius_m: 0.6
+  robot_radius_m: 0.7           # (0.6 let a corner clip a pole squeezing past)
   safety_margin_m: 0.4          # obstacles are grown by radius + margin
   stop_distance_m: 2.0          # stop this far from a victim
   kit_offset_m: 1.0             # the kit goes this far from the victim, on the UGV's side
