@@ -37,11 +37,16 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
 STUCK_TIME_S = 3.0      # ... for this long
 REVERSE_TIME_S = 2.0
+TIPPED_DEG = 60
 BUMP_ARRIVE_M = 1.5             # stuck within stop_distance + this of the goal counts as arrived
 REVERSE_ON = math.radians(110)   # a path target this far off the nose starts a multi-point turn ...
 REVERSE_OFF = math.radians(30)   # ... until it's within this of the nose
 PATH_COLOR = [0.1, 0.4, 1.0, 1.0]
 KIT_HEIGHT_M = 0.15     # the kit's origin above the ground
+
+
+class TippedOver(Exception):
+    pass
 
 
 def yaw_of(q):
@@ -141,6 +146,13 @@ class Ugv:
         s = self.client.getCarState(vehicle_name=self.name)
         p = s.kinematics_estimated.position
         return np.array([p.x_val, p.y_val]), yaw_of(s.kinematics_estimated.orientation), s.speed, p.z_val
+
+    def tilt_deg(self):
+        """How far the UGV leans from upright (deg): over ~60 it has tipped over."""
+        q = self.client.getCarState(vehicle_name=self.name).kinematics_estimated.orientation
+        # The body's down axis in the world: its z component is cos(tilt).
+        down_z = 1 - 2 * (q.x_val ** 2 + q.y_val ** 2)
+        return math.degrees(math.acos(max(-1.0, min(1.0, down_z))))
 
     def sense(self):
         """Add the latest lidar sweep to the map."""
@@ -295,6 +307,12 @@ class Ugv:
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
             pos, heading, speed, _ = self.state()
+            tilt = self.tilt_deg()
+            if tilt > TIPPED_DEG:
+                self.stop()
+                self.log(f"WARNING: tipped over ({tilt:.0f} deg from upright) on the way to {what}; "
+                         f"stopping (restart Play to put it back)")
+                raise TippedOver(what)
             if np.linalg.norm(goal - pos) <= tolerance + 0.3:
                 self.stop()
                 return "arrived"
@@ -497,6 +515,9 @@ class Ugv:
                 self.sleep(u["control_period_s"])
         except KeyboardInterrupt:
             self.log("stopped by user")
+        except TippedOver:
+            self.log(f"{len(self.served)} victim(s) served before it tipped over; "
+                     f"{len(self.queue)} still waiting")
         finally:
             try:
                 self.stop()

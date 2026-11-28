@@ -93,7 +93,7 @@ ugv:                            # the Husky (ugv.py)
   lidar: Lidar1                 # Vehicles.Car1.Sensors in settings.json
   subscribe: tcp://localhost:5556   # where mission.py publishes victims
   medkits: [MedKit_1, MedKit_2, MedKit_3, MedKit_4]  # tags of kit actors placed in the level (Movable)
-  max_speed: 3.0                # m/s on straight path
+  max_speed: 2.0                # m/s on straight path (it tipped over at 3)
   slow_speed: 1.0               # in turns and near the goal
   lookahead_m: 2.5              # pure pursuit
   steering_gain: 1.2            # steering per radian of heading error

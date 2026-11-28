@@ -365,3 +365,18 @@ def test_reverse_uses_the_reverse_gear(ugv_mod):
     assert car.cmd.throttle < 0 and car.cmd.is_manual_gear and car.cmd.manual_gear == -1
     u.controls(throttle=0.5)
     assert not car.cmd.is_manual_gear and car.cmd.manual_gear == 0
+
+
+def test_tipping_over_is_reported_and_stops_the_run(ugv_mod, capsys):
+    u, car = make(ugv_mod, [], [(0.0, victim(1, 20, 0))])
+    real = car.getCarState
+
+    def on_its_side(vehicle_name=""):
+        s = real(vehicle_name)
+        if car.t > 2:   # rolled 90 deg about its x axis
+            s.kinematics_estimated.orientation = Quat(math.cos(math.pi / 4), math.sin(math.pi / 4), 0, 0)
+        return s
+    car.getCarState = on_its_side
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "tipped over (90 deg" in out and not u.served
