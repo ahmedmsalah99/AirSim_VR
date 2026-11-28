@@ -349,6 +349,7 @@ class Ugv:
         self.backing = False
         rightings = 0
         stable = collections.deque()   # (time, pos, heading, z) while it stood steady, recent first last
+        last_safe = None               # where it was last righted
         timing = {"steps": 0, "sense": 0.0, "fetch": 0.0, "plan": 0.0, "since": self.now()}
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
@@ -371,9 +372,11 @@ class Ugv:
                 rightings += 1
                 # Back on its wheels where it last stood steady (on the spot where it fell, it
                 # rolled straight off again), and that spot marked so the next plan avoids it.
+                # (Tipping again before it stood steady anywhere: the place it was last righted at.)
                 back = [s for s in stable if self.now() - s[0] >= RIGHT_BACK_S] or list(stable) or \
-                       [(self.now(), pos, heading, z)]
-                _, safe_pos, safe_heading, safe_z = back[-1]
+                       ([last_safe] if last_safe else [(self.now(), pos, heading, z)])
+                last_safe = back[-1]
+                _, safe_pos, safe_heading, safe_z = last_safe
                 self.log(f"tipped over ({tilt:.0f} deg from upright, {self.touching()}, at "
                          f"x={self.to_world(pos)[0]:.1f} y={self.to_world(pos)[1]:.1f}); setting it back on its wheels "
                          f"{np.linalg.norm(pos - safe_pos):.1f} m back, where it was steady, and marking "
