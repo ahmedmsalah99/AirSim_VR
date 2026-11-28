@@ -45,6 +45,7 @@ RIGHT_BACK_S = 2.0   # ... from at least this long before it tipped
 TIPPED_DEG = 60       # leaning more than this: it has tipped over ...
 MAX_RIGHTINGS = 3     # ... and is set back on its wheels up to this many times per trip
 LEAN_DEG = 25         # leaning more than this: ease off and straighten up
+NEAR_ARRIVE_M = 1.0             # within stop distance + clearance + this, a long way round is arrival
 BUMP_ARRIVE_M = 1.5             # stuck within stop_distance + this of the goal counts as arrived
 REVERSE_ON = math.radians(110)   # a path target this far off the nose starts a multi-point turn ...
 REVERSE_OFF = math.radians(30)   # ... until it's within this of the nose
@@ -417,6 +418,22 @@ class Ugv:
                 t_plan = self.now()
                 self.replan(pos, goal, tolerance)
                 timing["plan"] += self.now() - t_plan
+                # Next to the goal but the plan goes a long way round (the near side of the ring
+                # around a victim is blocked, by the person and what stands around them): it's
+                # there. It used to drive off round the victim to the far side instead.
+                straight = float(np.linalg.norm(goal - pos))
+                near = tolerance + self.radius + NEAR_ARRIVE_M   # as close as clearance may allow
+                if self.path is None and straight <= near:
+                    self.stop()
+                    self.log(f"{straight:.1f} m from {what}, and no way closer: close enough")
+                    return "arrived"
+                if self.path is not None and straight <= near:
+                    length = sum(float(np.linalg.norm(np.subtract(b, a))) for a, b in zip(self.path, self.path[1:]))
+                    if length > 2 * max(straight - tolerance, 0.5) + 1.0:
+                        self.stop()
+                        self.log(f"{straight:.1f} m from {what}, and the way to {tolerance:.1f} m from it is "
+                                 f"{length:.0f} m round: close enough")
+                        return "arrived"
             if self.path is None:
                 self.stop()
                 no_path_since = no_path_since or self.now()
