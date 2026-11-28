@@ -137,7 +137,7 @@ class SimCar:
         pts = []
         for k in range(len(a)):
             if best[k] < 30:
-                pts += [self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k], self.z - 1.0]
+                pts += [self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k], self.z - 0.2]
             pts += [self.x + d[k, 0] * 6, self.y + d[k, 1] * 6, self.z + 0.3]   # the ground
         return types.SimpleNamespace(point_cloud=pts)
 
@@ -302,3 +302,15 @@ def test_boxed_in_is_explained(ugv_mod):
     u.grid.update((0, 0), ring)
     why = u.explain_no_path(np.zeros(2), np.array([20.0, 0]), 2.0, "victim 1")
     assert why.startswith("the UGV is boxed in where it is")
+
+
+def test_branches_above_the_husky_are_not_obstacles(ugv_mod):
+    u, car = make(ugv_mod, [], [])
+    ground = car.z + u.u["base_height_m"]          # NED: up is -z
+    pts = [5, 0, ground - 2.0,                     # a branch 2 m up: the Husky passes under
+           6, 0, ground - 0.8]                     # a trunk or wall at 0.8 m: an obstacle
+    car.getLidarData = lambda **k: types.SimpleNamespace(point_cloud=pts)
+    u.sense()
+    occ = u.grid.occupied()
+    assert not occ[tuple(u.grid.to_cell((5, 0)))]
+    assert occ[tuple(u.grid.to_cell((6, 0)))]
