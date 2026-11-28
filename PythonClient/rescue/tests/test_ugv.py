@@ -449,3 +449,33 @@ def test_a_tagged_victim_is_driven_to_without_the_drone(ugv_mod, capsys):
     assert [v["id"] for v in u.served] == ["Victim_01"] and car.collisions == 0
     with pytest.raises(SystemExit, match="Nobody"):
         u.queue_actor("Nobody")
+
+
+def _terrain(g, height_of):
+    """Feed the grid a dense patch of ground points around (0, 0) with heights height_of(x, y)."""
+    xs, ys = np.meshgrid(np.arange(0, 12, 0.1), np.arange(-3, 3, 0.1))
+    xy = np.stack([xs.ravel(), ys.ravel()], axis=1)
+    g.update_ground(xy, height_of(xy[:, 0], xy[:, 1]), step_m=0.25, max_slope_deg=22)
+
+
+def test_a_gentle_slope_is_drivable():
+    g = OccupancyGrid((0, 0), 40, 0.25)
+    _terrain(g, lambda x, y: np.tan(np.radians(12)) * x)
+    assert not g.steep.any()
+
+
+def test_a_steep_ramp_is_an_obstacle():
+    g = OccupancyGrid((0, 0), 40, 0.25)
+    _terrain(g, lambda x, y: np.where(x > 6, np.tan(np.radians(32)) * (x - 6), 0.0))
+    assert g.steep[tuple(g.to_cell((8, 0)))]               # on the ramp
+    assert not g.steep[tuple(g.to_cell((3, 0)))]           # the flat ground before it
+    assert g.plan((0, 0), (11, 0), radius_m=0.7) is None    # a goal on the ramp can't be reached
+    path = g.plan((0, 0), (11, 8), radius_m=0.7)            # around it instead
+    assert path is not None and not any(g.steep[tuple(g.to_cell(p))] for p in path)
+
+
+def test_a_kerb_is_an_obstacle():
+    g = OccupancyGrid((0, 0), 40, 0.25)
+    _terrain(g, lambda x, y: np.where(x > 6, 0.3, 0.0))
+    assert g.steep[tuple(g.to_cell((6.3, 0)))]              # the top edge
+    assert not g.steep[tuple(g.to_cell((5.5, 0)))] and not g.steep[tuple(g.to_cell((9, 0)))]

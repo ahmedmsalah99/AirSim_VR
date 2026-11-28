@@ -191,6 +191,10 @@ class Ugv:
         obstacles = pts[((height >= u["obstacle_min_height_m"]) & (height <= u["obstacle_max_height_m"]))
                         | (height < -u["drop_m"]), :2]
         self.grid.update(pos, obstacles)
+        # Terrain: every surface point up to obstacle height goes into the height map, which marks
+        # steps and slopes too steep to drive (a ramp, a bank, a kerb) as obstacles.
+        surface = height <= u["obstacle_max_height_m"]
+        self.grid.update_ground(pts[surface, :2], -pts[surface, 2], u["max_step_m"], u["max_slope_deg"])
 
     def check_victims(self):
         """Queue newly published victims (by id; one within 3 m of a known one is the same)."""
