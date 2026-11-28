@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from occupancy_grid import OccupancyGrid  # noqa: E402
 
 DT = 0.1          # simulated seconds per control step
+OUT = None        # set per test: where ugv.py saves its map pictures
 WHEELBASE = 0.8
 MAX_STEER = math.radians(35)
 
@@ -121,19 +122,23 @@ class SimCar:
     def getLidarData(self, lidar_name="", vehicle_name=""):
         """A 360 deg sweep at 1 m above the ground: hits on the obstacles within 30 m, plus a
         ground hit ring (below the obstacle height band, so not an obstacle)."""
+        a = np.linspace(-math.pi, math.pi, 360, endpoint=False)
+        d = np.stack([np.cos(a), np.sin(a)], axis=1)                      # (rays, 2)
+        best = np.full(len(a), 30.0)
+        if self.obstacles:
+            obs = np.asarray(self.obstacles, float)                        # (n, 3)
+            rel = obs[:, :2] - [self.x, self.y]                            # (n, 2)
+            along = d @ rel.T                                              # (rays, n)
+            perp2 = (rel ** 2).sum(1)[None, :] - along ** 2
+            r2 = obs[:, 2][None, :] ** 2
+            hit = (along > 0) & (perp2 <= r2)
+            dist = np.where(hit, along - np.sqrt(np.maximum(r2 - perp2, 0)), np.inf)
+            best = np.minimum(best, dist.min(axis=1))
         pts = []
-        for a in np.linspace(-math.pi, math.pi, 360, endpoint=False):
-            d = np.array([math.cos(a), math.sin(a)])
-            best = 30.0
-            for ox, oy, r in self.obstacles:
-                rel = np.array([ox - self.x, oy - self.y])
-                along = rel @ d
-                perp2 = rel @ rel - along ** 2
-                if along > 0 and perp2 <= r * r:
-                    best = min(best, along - math.sqrt(r * r - perp2))
-            if best < 30:
-                pts += [self.x + d[0] * best, self.y + d[1] * best, self.z - 1.0]
-            pts += [self.x + d[0] * 6, self.y + d[1] * 6, self.z + 0.3]   # the ground
+        for k in range(len(a)):
+            if best[k] < 30:
+                pts += [self.x + d[k, 0] * best[k], self.y + d[k, 1] * best[k], self.z - 1.0]
+            pts += [self.x + d[k, 0] * 6, self.y + d[k, 1] * 6, self.z + 0.3]   # the ground
         return types.SimpleNamespace(point_cloud=pts)
 
     def simSetObjectPose(self, tag, pose, teleport=True):
@@ -161,7 +166,9 @@ def victim(vid, x, y, z=0.0):
 
 
 @pytest.fixture
-def ugv_mod(monkeypatch):
+def ugv_mod(monkeypatch, tmp_path):
+    global OUT
+    OUT = tmp_path
     fake = types.ModuleType("airsim")
 
     class CarControls:
@@ -181,6 +188,7 @@ def ugv_mod(monkeypatch):
 
 def make(ugv_mod, obstacles, schedule):
     mod, cfg = ugv_mod
+    mod.OUTPUT_DIR = OUT
     cfg["ugv"]["spawn_ned"] = [0, 0, -2]
     car = SimCar(obstacles)
     u = mod.Ugv(cfg, client=car, subscriber=Inbox(car, schedule))
@@ -248,6 +256,9 @@ def test_unreachable_victim_is_given_up_and_the_ugv_goes_home(ugv_mod, capsys):
     u.run(once=True)
     out = capsys.readouterr().out
     assert "giving up" in out or "took too long" in out
+    if "giving up" in out:
+        assert "every way there is blocked" in out    # the victim's surroundings are free; the ring isn't
+        assert list(OUT.glob("ugv_noway_*.png"))
     assert len(u.failed) == 1 and not u.served
     assert car.collisions == 0
     assert math.hypot(car.x, car.y) <= u.u["home_radius_m"] + 0.3
@@ -269,3 +280,25 @@ def test_check_says_when_the_husky_doesnt_move(ugv_mod, capsys):
     u.check()
     out = capsys.readouterr().out
     assert "DIDN'T MOVE" in out and "steering_sign should be" not in out
+
+
+def test_a_gap_too_narrow_for_the_safety_margin_is_squeezed_through(ugv_mod, capsys):
+    # A wall of posts across the whole map with a 2.4 m gap: wide enough for the robot (radius
+    # 0.6 m) but not with the 0.4 m margin on top. (With a way around the wall's end, it would
+    # rather take that.)
+    posts = [(10, y, 0.25) for y in np.arange(-31, -1.2 + 0.01, 0.4)] + \
+            [(10, y, 0.25) for y in np.arange(1.2, 31.01, 0.4)]
+    u, car = make(ugv_mod, posts, [(0.0, victim(1, 20, 0))])
+    u.grid = OccupancyGrid((0, 0), 60, 0.25)
+    u.run(once=True)
+    out = capsys.readouterr().out
+    assert "narrow gap" in out
+    assert len(u.served) == 1 and car.collisions == 0
+
+
+def test_boxed_in_is_explained(ugv_mod):
+    u, car = make(ugv_mod, [], [])
+    ring = [(3 * math.cos(a), 3 * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 300)]
+    u.grid.update((0, 0), ring)
+    why = u.explain_no_path(np.zeros(2), np.array([20.0, 0]), 2.0, "victim 1")
+    assert why.startswith("the UGV is boxed in where it is")

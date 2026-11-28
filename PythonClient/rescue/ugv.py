@@ -26,12 +26,14 @@ import json
 import math
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
 from occupancy_grid import OccupancyGrid
 from survey_plan import DEFAULT_CONFIG, load_config
 
+OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
 STUCK_TIME_S = 3.0      # ... for this long
 REVERSE_TIME_S = 2.0
@@ -108,7 +110,7 @@ class Ugv:
         self.radius = u["robot_radius_m"] + u["safety_margin_m"]
         self.queue, self.served, self.failed, self.seen_ids = [], [], [], set()
         self.kits = list(u["medkits"])
-        self.path, self.last_plan = None, -math.inf
+        self.path, self.last_plan, self.squeezing = None, -math.inf, False
         self.t0 = self.now()
 
     # ---- bookkeeping -------------------------------------------------------------------
@@ -177,9 +179,38 @@ class Ugv:
 
     def replan(self, pos, goal, tolerance):
         self.path = self.grid.plan(pos, goal, self.radius, tolerance)
+        if self.path is None:
+            # Squeeze through: only the robot's radius, without the safety margin.
+            self.path = self.grid.plan(pos, goal, self.u["robot_radius_m"], tolerance)
+            if self.path is not None and not self.squeezing:
+                self.log(f"no way with the {self.u['safety_margin_m']} m safety margin; going through a "
+                         f"narrow gap without it")
+            self.squeezing = self.path is not None
+        else:
+            self.squeezing = False
         self.last_plan = self.now()
         if self.path is not None:
             self.draw(self.path)
+
+    def explain_no_path(self, pos, goal, tolerance, what):
+        """Why there's no path (logged), and a picture of the map saved to output/."""
+        r = self.u["robot_radius_m"]
+        reasons = []
+        if self.grid.enclosed(pos, r):
+            reasons.append("the UGV is boxed in where it is")
+        if self.grid.goal_blocked(goal, r, tolerance):
+            reasons.append(f"everywhere within {tolerance:.1f} m of {what} is blocked")
+        reason = " and ".join(reasons) or "every way there is blocked"
+        name = OUTPUT_DIR / f"ugv_noway_{time.strftime('%Y%m%d_%H%M%S')}.png"
+        try:
+            import cv2
+            img = self.grid.picture(r, [(pos, (255, 0, 0)), (goal, (0, 0, 255))])
+            OUTPUT_DIR.mkdir(exist_ok=True)
+            cv2.imwrite(str(name), img)
+            saved = f"; map saved to {name} (UGV blue, goal red, obstacles black, too close grey, north up)"
+        except Exception as e:  # noqa: BLE001 - the picture is only a help
+            saved = f" (couldn't save the map: {e!r})"
+        return reason + saved
 
     def draw(self, path):
         try:
@@ -236,7 +267,8 @@ class Ugv:
                 self.stop()
                 no_path_since = no_path_since or self.now()
                 if self.now() - no_path_since > u["no_path_timeout_s"]:
-                    self.log(f"WARNING: no way to {what} in the map; giving up")
+                    self.log(f"WARNING: no way to {what} in the map: "
+                             f"{self.explain_no_path(pos, goal, tolerance, what)}; giving up")
                     return "failed"
                 self.sleep(u["control_period_s"])
                 continue
