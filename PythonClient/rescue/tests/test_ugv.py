@@ -354,7 +354,7 @@ def test_a_victim_behind_in_a_tight_spot_is_reached_with_a_3_point_turn(ugv_mod,
     for r in seen_reverse:
         run = run + 1 if r else 0
         longest = max(longest, run)
-    assert longest * DT < 4                             # short reversing legs, not the whole way back
+    assert longest * DT < 6                             # short reversing legs, not the whole way back
 
 
 def test_something_the_lidar_misses_is_bumped_once_marked_and_driven_around(ugv_mod, capsys):

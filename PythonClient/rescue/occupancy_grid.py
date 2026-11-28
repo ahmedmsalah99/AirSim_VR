@@ -15,6 +15,8 @@ import numpy as np
 
 L_HIT, L_FREE, L_MIN, L_MAX = 0.85, -0.4, -2.0, 3.5
 L_OCCUPIED = 0.7  # above this a cell is an obstacle: one hit is enough
+REGROW_EVERY = 10  # scans between full rebuilds of the grown obstacles
+FREE_RANGE_M = 15.0  # rays clear the cells they cross up to this far (beyond, it's slow and coarse)
 SQRT2 = math.sqrt(2)
 NEIGHBOURS = [(-1, -1, SQRT2), (-1, 0, 1.0), (-1, 1, SQRT2), (0, -1, 1.0),
               (0, 1, 1.0), (1, -1, SQRT2), (1, 0, 1.0), (1, 1, SQRT2)]
@@ -26,7 +28,8 @@ class OccupancyGrid:
         self.n = int(math.ceil(size_m / resolution_m))
         self.origin = np.asarray(center_xy, float) - self.n * resolution_m / 2  # corner of cell (0, 0)
         self.logodds = np.zeros((self.n, self.n), np.float32)
-        self._blocked = {}  # radius -> grown obstacles, until the next update
+        self._blocked = {}  # radius -> grown obstacles (kept up to date by update())
+        self._updates = 0
         self.bounds = None  # (lo_xy, hi_xy): the robot's centre stays inside
 
     # ---- cells -------------------------------------------------------------------------
@@ -45,37 +48,49 @@ class OccupancyGrid:
 
     # ---- mapping -----------------------------------------------------------------------
 
-    def update(self, sensor_xy, hits_xy):
+    def update(self, sensor_xy, hits_xy, free_range_m=FREE_RANGE_M):
         """One scan: hits_xy are obstacle points seen from sensor_xy. The cells between the
-        sensor and each hit get freer, the hit cells more occupied (each once per scan)."""
+        sensor and each hit (up to free_range_m out) get freer, the hit cells more occupied
+        (each once per scan)."""
         hits = np.asarray(hits_xy, float).reshape(-1, 2)
         if not len(hits):
             return
         # One ray per hit cell, not per point: a lidar sweep has thousands of points, mostly
-        # several to a cell, and every ray is sampled along its whole length.
-        cells = self._unique_cells(hits)
-        if not len(cells):
+        # several to a cell. Cells are handled as flat indices (fast to make unique).
+        hit_idx = self._flat(hits)
+        if not len(hit_idx):
             return
-        hits = self.to_xy(cells)
+        hits = self.to_xy(np.stack(np.unravel_index(hit_idx, (self.n, self.n)), axis=1))
         sensor = np.asarray(sensor_xy, float)
         d = np.linalg.norm(hits - sensor, axis=1)
-        step = self.res / 2
-        steps = np.arange(0, d.max(), step)
-        # Samples along every ray, stopping a cell short of the hit.
-        t = steps[None, :] / np.maximum(d[:, None], 1e-9)
-        keep = steps[None, :] < d[:, None] - self.res
-        samples = sensor + t[..., None] * (hits - sensor)[:, None, :]
-        free = self._unique_cells(samples[keep])
-        occupied = self._unique_cells(hits)
-        if len(free) and len(occupied):
-            # A cell hit in this scan isn't also freed by another ray passing through it.
-            free = free[~np.isin(free[:, 0] * self.n + free[:, 1], occupied[:, 0] * self.n + occupied[:, 1])]
-        if len(free):
-            self.logodds[free[:, 0], free[:, 1]] += L_FREE
-        if len(occupied):
-            self.logodds[occupied[:, 0], occupied[:, 1]] += L_HIT
+        reach = np.minimum(d - self.res, free_range_m)          # free up to a cell short of the hit
+        steps = np.arange(0, max(float(reach.max()), 0.0), self.res * 0.75)
+        if len(steps):
+            unit = (hits - sensor) / np.maximum(d[:, None], 1e-9)
+            keep = steps[None, :] < reach[:, None]
+            samples = sensor + steps[None, :, None] * unit[:, None, :]
+            free = np.zeros(self.n * self.n, bool)
+            free[self._flat(samples[keep])] = True
+            free[hit_idx] = False                                # hit this scan: not also freed
+            self.logodds.reshape(-1)[free] += L_FREE
+        self.logodds.reshape(-1)[hit_idx] += L_HIT
         np.clip(self.logodds, L_MIN, L_MAX, out=self.logodds)
-        self._blocked = {}
+        # Grown obstacles: add the new hits to the cached maps (cheap), and rebuild them from
+        # scratch every few scans so cells the rays have cleared open up again.
+        self._updates += 1
+        if self._updates % REGROW_EVERY == 0:
+            self._blocked = {}
+        else:
+            now_occupied = hit_idx[self.logodds.reshape(-1)[hit_idx] > L_OCCUPIED]
+            cells = np.stack(np.unravel_index(now_occupied, (self.n, self.n)), axis=1)
+            for radius, grown in self._blocked.items():
+                self._stamp(grown, cells, radius)
+
+    def _flat(self, xy):
+        """Unique flat indices of the cells at points xy (inside the map)."""
+        cells = self.to_cell(xy).reshape(-1, 2)
+        cells = cells[self.inside(cells)]
+        return np.unique(cells[:, 0] * self.n + cells[:, 1]) if len(cells) else np.zeros(0, int)
 
     def mark(self, xy):
         """Mark the cells at points xy as surely occupied (e.g. something bumped into that the
@@ -113,9 +128,13 @@ class OccupancyGrid:
             (i0, j0), (i1, j1) = self.to_cell(self.bounds[0]), self.to_cell(self.bounds[1])
             out[:] = True
             out[max(i0, 0):max(i1 + 1, 0), max(j0, 0):max(j1 + 1, 0)] = False
-        cells = np.argwhere(self.occupied())
+        self._stamp(out, np.argwhere(self.occupied()), radius_m)
+        return out
+
+    def _stamp(self, out, cells, radius_m):
+        """Mark every cell within radius_m of cells in out."""
         if not len(cells):
-            return out
+            return
         r = int(math.ceil(radius_m / self.res))
         di, dj = np.mgrid[-r:r + 1, -r:r + 1]
         disk = np.stack([di[di ** 2 + dj ** 2 <= r * r], dj[di ** 2 + dj ** 2 <= r * r]], axis=1)
