@@ -76,6 +76,14 @@ class OccupancyGrid:
         np.clip(self.logodds, L_MIN, L_MAX, out=self.logodds)
         self._blocked = {}
 
+    def mark(self, xy):
+        """Mark the cells at points xy as surely occupied (e.g. something bumped into that the
+        lidar doesn't see). Clearing them takes many scans seeing through them."""
+        cells = self._unique_cells(np.asarray(xy, float).reshape(-1, 2))
+        if len(cells):
+            self.logodds[cells[:, 0], cells[:, 1]] = L_MAX
+            self._blocked = {}
+
     def _unique_cells(self, xy):
         cells = self.to_cell(xy)
         cells = cells[self.inside(cells)]
