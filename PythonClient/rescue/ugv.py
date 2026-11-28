@@ -173,8 +173,13 @@ class Ugv:
     # ---- driving -----------------------------------------------------------------------
 
     def controls(self, throttle=0.0, steering=0.0, brake=0.0):
+        """throttle < 0 reverses. AirSim needs the reverse gear for that, as its hello_car.py
+        does: in automatic gear a negative throttle only brakes (the Husky stayed put)."""
         c = self.airsim.CarControls()
         c.throttle, c.steering, c.brake = float(throttle), float(steering), float(brake)
+        c.is_manual_gear = throttle < 0
+        c.manual_gear = -1 if throttle < 0 else 0
+        c.gear_immediate = True
         self.client.setCarControls(c, vehicle_name=self.name)
 
     def stop(self):

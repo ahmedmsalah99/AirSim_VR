@@ -352,3 +352,11 @@ def test_bumping_into_the_victim_near_the_goal_counts_as_arrived(ugv_mod, capsys
     out = capsys.readouterr().out
     assert "close enough" in out
     assert len(u.served) == 1 and "MedKit_1 placed" in out
+
+
+def test_reverse_uses_the_reverse_gear(ugv_mod):
+    u, car = make(ugv_mod, [], [])
+    u.controls(throttle=-0.5)
+    assert car.cmd.throttle < 0 and car.cmd.is_manual_gear and car.cmd.manual_gear == -1
+    u.controls(throttle=0.5)
+    assert not car.cmd.is_manual_gear and car.cmd.manual_gear == 0
