@@ -284,12 +284,13 @@ class Ugv:
         return True
 
     def check(self):
-        """Check the lidar and the steering before a real run: one sweep's heights, then a short
-        drive with steering +0.5 to see which way the Husky turns."""
+        """Check the lidar and the driving before a real run: where one sweep's points are, then a
+        short drive with steering +0.5 to see whether and which way the Husky moves."""
         c, u = self.client, self.u
         c.confirmConnection()
         c.enableApiControl(True, self.name)
         pos, heading, _, z = self.state()
+        self.log(f"pose: x={pos[0]:.2f} y={pos[1]:.2f} z={z:.2f} (local NED), heading {math.degrees(heading):.0f} deg")
         data = c.getLidarData(lidar_name=u["lidar"], vehicle_name=self.name)
         pts = np.asarray(data.point_cloud, float)
         if len(pts) < 3:
@@ -299,22 +300,41 @@ class Ugv:
             pts = pts[: len(pts) // 3 * 3].reshape(-1, 3)
             height = z + u["base_height_m"] - pts[:, 2]
             rng = np.linalg.norm(pts[:, :2] - pos, axis=1)
-            near = height[rng < 15]
-            obstacle = (height >= u["obstacle_min_height_m"]) & (height <= u["obstacle_max_height_m"])
-            self.log(f"lidar: {len(pts)} points in one sweep, {obstacle.sum()} in the obstacle band")
-            if len(near):
-                self.log(f"  heights above the assumed ground (within 15 m): lowest 10% "
-                         f"{np.percentile(near, 10):+.2f} m, median {np.median(near):+.2f} m. The ground "
-                         f"should come out near 0; if it's off, change ugv.base_height_m by that much")
-        self.log("driving 3 s with steering +0.5 ...")
+            band = (height >= u["obstacle_min_height_m"]) & (height <= u["obstacle_max_height_m"])
+            self.log(f"lidar: {len(pts)} points in one sweep, {band.sum()} in the obstacle band "
+                     f"({u['obstacle_min_height_m']}..{u['obstacle_max_height_m']} m above the assumed ground)")
+            self.log("  range       points  in band  height above the assumed ground (10% / median / 90%)")
+            for lo, hi in ((0, 1.5), (1.5, 5), (5, 15), (15, 1e9)):
+                m = (rng >= lo) & (rng < hi)
+                if m.any():
+                    q = np.percentile(height[m], [10, 50, 90])
+                    label = f"{lo:g}-{hi:g} m" if hi < 1e9 else f"{lo:g}+ m"
+                    self.log(f"  {label:<10} {m.sum():7d}  {band[m].sum():7d}  "
+                             f"{q[0]:+.2f} / {q[1]:+.2f} / {q[2]:+.2f} m")
+            if (rng < 1.5).sum() > 0.05 * len(pts):
+                self.log("  WARNING: many points within 1.5 m: the lidar may be hitting the Husky itself "
+                         "(e.g. a mesh added as a child actor). Raise the lidar (Z in settings.json) or "
+                         "turn off collision on that mesh")
+        self.log("driving 3 s: throttle 0.4, steering +0.5 ...")
+        top = 0.0
         for _ in range(30):
             self.controls(throttle=0.4, steering=0.5)
             self.sleep(0.1)
+            top = max(top, self.state()[2])
         self.stop()
-        turned = math.degrees(wrap(self.state()[1] - heading))
-        side = "right" if turned > 0 else "left"
-        self.log(f"turned {abs(turned):.0f} deg to the {side} (NED heading). Pure pursuit expects steering > 0 to turn "
-                 f"right: ugv.steering_sign should be {1 if turned > 0 else -1}")
+        new_pos, new_heading, _, _ = self.state()
+        moved = float(np.linalg.norm(new_pos - pos))
+        turned = math.degrees(wrap(new_heading - heading))
+        self.log(f"moved {moved:.2f} m, top speed {top:.2f} m/s, turned {turned:+.0f} deg")
+        if moved < 0.3:
+            self.log("  the Husky DIDN'T MOVE, so the steering direction is unknown. Check that it drives "
+                     "at all, e.g. with PythonClient/both/car_go_back.py, and that nothing is in front of it")
+        elif abs(turned) < 3:
+            self.log("  it moved but didn't turn: steering may not reach the wheels")
+        else:
+            side = "right" if turned > 0 else "left"
+            self.log(f"  it turned {side}. Pure pursuit expects steering > 0 to turn right: "
+                     f"ugv.steering_sign should be {1 if turned > 0 else -1}")
         c.enableApiControl(False, self.name)
 
     def nearest(self):
