@@ -374,7 +374,8 @@ class Ugv:
                 back = [s for s in stable if self.now() - s[0] >= RIGHT_BACK_S] or list(stable) or \
                        [(self.now(), pos, heading, z)]
                 _, safe_pos, safe_heading, safe_z = back[-1]
-                self.log(f"tipped over ({tilt:.0f} deg from upright); setting it back on its wheels "
+                self.log(f"tipped over ({tilt:.0f} deg from upright, {self.touching()}, at "
+                         f"x={self.to_world(pos)[0]:.1f} y={self.to_world(pos)[1]:.1f}); setting it back on its wheels "
                          f"{np.linalg.norm(pos - safe_pos):.1f} m back, where it was steady, and marking "
                          f"the spot ({rightings}/{MAX_RIGHTINGS})")
                 self.grid.mark([pos + np.array([dx, dy]) for dx in np.arange(-0.75, 0.76, 0.25)
