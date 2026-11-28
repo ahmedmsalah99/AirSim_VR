@@ -260,3 +260,12 @@ def test_check_reports_points_and_the_steering_sign(ugv_mod, capsys):
     out = capsys.readouterr().out
     assert "points in one sweep" in out
     assert "steering_sign should be 1" in out       # the simulated car turns right for steering > 0
+
+
+def test_check_says_when_the_husky_doesnt_move(ugv_mod, capsys):
+    u, car = make(ugv_mod, [], [])
+    car.enableApiControl = lambda *a, **k: None
+    car.setCarControls = lambda controls, vehicle_name="": car.step()   # controls never reach the car
+    u.check()
+    out = capsys.readouterr().out
+    assert "DIDN'T MOVE" in out and "steering_sign should be" not in out
