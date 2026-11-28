@@ -37,7 +37,9 @@ OUTPUT_DIR = Path(__file__).with_name("output")
 STUCK_SPEED = 0.15      # m/s: below this while driving counts as stuck ...
 STUCK_TIME_S = 3.0      # ... for this long
 REVERSE_TIME_S = 2.0
-TIPPED_DEG = 60
+TIPPED_DEG = 60       # leaning more than this: it has tipped over ...
+MAX_RIGHTINGS = 3     # ... and is set back on its wheels up to this many times per trip
+LEAN_DEG = 25         # leaning more than this: ease off and straighten up
 BUMP_ARRIVE_M = 1.5             # stuck within stop_distance + this of the goal counts as arrived
 REVERSE_ON = math.radians(110)   # a path target this far off the nose starts a multi-point turn ...
 REVERSE_OFF = math.radians(30)   # ... until it's within this of the nose
@@ -151,6 +153,16 @@ class Ugv:
         s = self.client.getCarState(vehicle_name=self.name)
         p = s.kinematics_estimated.position
         return np.array([p.x_val, p.y_val]), yaw_of(s.kinematics_estimated.orientation), s.speed, p.z_val
+
+    def right(self, heading):
+        """Put the UGV back on its wheels where it is, facing heading, a little above the ground."""
+        a = self.airsim
+        pose = self.client.simGetVehiclePose(vehicle_name=self.name)
+        h = heading / 2
+        upright = a.Pose(a.Vector3r(pose.position.x_val, pose.position.y_val, pose.position.z_val - 0.5),
+                         a.Quaternionr(0.0, 0.0, math.sin(h), math.cos(h)))
+        self.client.simSetVehiclePose(upright, True, vehicle_name=self.name)
+        self.sleep(1.0)
 
     def tilt_deg(self):
         """How far the UGV leans from upright (deg): over ~60 it has tipped over."""
@@ -286,8 +298,12 @@ class Ugv:
         want = u["max_speed"] if abs(alpha) < 0.5 and not self.backing else u["slow_speed"]
         want = min(want, max(u["slow_speed"], np.linalg.norm(np.asarray(path[-1]) - pos) / 2))
         mag = abs(speed)
-        throttle = float(np.clip(0.3 + 0.4 * (want - mag), 0, 1)) if mag < want + 0.3 else 0.0
+        throttle = float(np.clip(0.3 + 0.4 * (want - mag), 0, u["max_throttle"])) if mag < want + 0.3 else 0.0
         brake = 0.0 if mag < want + 0.3 else 0.3
+        # Less steering the faster it goes: full lock only at walking pace (full lock at speed
+        # is what rolls a vehicle).
+        limit = 1.0 / (1.0 + max(mag - 0.5, 0.0))
+        steering = float(np.clip(steering, -limit, limit))
         return (throttle if forward else -throttle), steering, brake
 
     def close(self, pos, direction, clearance=0.6):
@@ -311,15 +327,28 @@ class Ugv:
         deadline = start + np.linalg.norm(goal - pos) / u["slow_speed"] * 3 + 60
         self.path, self.last_plan, slow_since, no_path_since = None, -math.inf, None, None
         self.backing = False
+        rightings = 0
         self.log(f"driving to {what} ({np.linalg.norm(goal - pos):.0f} m away)")
         while True:
             pos, heading, speed, _ = self.state()
             tilt = self.tilt_deg()
             if tilt > TIPPED_DEG:
                 self.stop()
-                self.log(f"WARNING: tipped over ({tilt:.0f} deg from upright) on the way to {what}; "
-                         f"stopping (restart Play to put it back)")
-                raise TippedOver(what)
+                if rightings >= MAX_RIGHTINGS:
+                    self.log(f"WARNING: tipped over ({tilt:.0f} deg from upright) on the way to {what} "
+                             f"{rightings + 1} times; stopping (restart Play to put it back)")
+                    raise TippedOver(what)
+                rightings += 1
+                self.log(f"tipped over ({tilt:.0f} deg from upright); setting it back on its wheels "
+                         f"({rightings}/{MAX_RIGHTINGS})")
+                self.right(heading)
+                self.path, self.last_plan = None, -math.inf
+                continue
+            if tilt > LEAN_DEG:
+                # Leaning hard: ease off and straighten up before it rolls.
+                self.controls(throttle=0.0, steering=0.0, brake=0.5)
+                self.sleep(u["control_period_s"])
+                continue
             if np.linalg.norm(goal - pos) <= tolerance + 0.3:
                 self.stop()
                 return "arrived"
